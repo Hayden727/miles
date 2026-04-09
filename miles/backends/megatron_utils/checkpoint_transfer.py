@@ -14,7 +14,8 @@ from miles.utils.process_group_utils import GroupInfo
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_TIMEOUT = timedelta(seconds=120)
+# Must accommodate receiver's model init time (can take minutes for large models)
+_DEFAULT_TIMEOUT = timedelta(seconds=600)
 
 
 def send_ckpt(
