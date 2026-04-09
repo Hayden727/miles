@@ -1893,7 +1893,7 @@ def miles_validate_args(args):
         args.enable_witness = True
         args.non_persistent_ckpt_type = "local"
         if args.non_persistent_local_ckpt_algo is None:
-            args.non_persistent_local_ckpt_algo = "fully_parallel"
+            args.non_persistent_local_ckpt_algo = "atomic"
         logger.info(
             "train in ft_components. Auto set indep_dp=True, delay_split_train_data_by_dp=True, save_local_weight_checksum=True, enable_event_analyzer=True, enable_witness=True, non_persistent_ckpt_type='local', non_persistent_local_ckpt_algo=%r",
             args.non_persistent_local_ckpt_algo,
