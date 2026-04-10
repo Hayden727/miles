@@ -67,6 +67,7 @@ _ASSISTANT_START_BY_MODEL: dict[str, str] = {
     "moonshotai/Kimi-K2-Instruct": "<|im_assistant|>assistant<|im_middle|>",
     "moonshotai/Kimi-K2.5": "<|im_assistant|>assistant<|im_middle|>",
     "XiaomiMiMo/MiMo-7B-RL": "<|im_start|>assistant\n",
+    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16": "<|im_start|>assistant\n",
 }
 _NO_SYSTEM_APPEND_MODELS = {
     "deepseek-ai/DeepSeek-V3",

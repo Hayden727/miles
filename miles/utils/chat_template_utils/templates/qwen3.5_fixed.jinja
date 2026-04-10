@@ -75,9 +75,6 @@
         {%- endif %}
     {%- endif %}
 {%- endfor %}
-{%- if ns.multi_step_tool %}
-    {{- raise_exception('No user query found in messages.') }}
-{%- endif %}
 {%- for message in messages %}
     {%- set content = render_content(message.content, true)|trim %}
     {%- if message.role == "system" %}
