@@ -34,6 +34,7 @@ TOOL_CALL_TEST_MODELS = [
     "moonshotai/Kimi-K2-Instruct",
     "moonshotai/Kimi-K2.5",
     "XiaomiMiMo/MiMo-7B-RL",
+    "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
 ]
 
 # Models excluded from TITO testing due to known template incompatibilities.
