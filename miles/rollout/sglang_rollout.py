@@ -257,25 +257,30 @@ async def generate_and_rm(
 
     state = GenerateState(args)
 
+    # Decide agentic vs. token branch up-front so the agent-task semaphore can gate
+    # *before* state.semaphore / dp_rank_context. Otherwise a throttled agentic task
+    # would hold a sglang slot and a DP rank while idle, starving the token path and
+    # skewing DP-rank balancing.
+    # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
+    custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
+    generate_fn = load_generate_function(custom_func_path) if custom_func_path else None
+    agent_cm = (
+        state.agent_semaphore
+        if generate_fn is not None and state.agent_semaphore is not None
+        else nullcontext()
+    )
+
     # generate
-    async with state.semaphore:
+    async with agent_cm, state.semaphore:
         if state.aborted:
             sample.status = Sample.Status.ABORTED
             return sample
 
         with state.dp_rank_context() as _:
-            # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
-            custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
-
-            generate_fn = load_generate_function(custom_func_path) if custom_func_path else None
             if generate_fn is not None:
-                agent_cm = state.agent_semaphore if state.agent_semaphore is not None else nullcontext()
-                async with agent_cm:
-                    output = await generate_fn(
-                        GenerateFnInput(
-                            state=state, sample=sample, sampling_params=sampling_params, evaluation=evaluation
-                        )
-                    )
+                output = await generate_fn(
+                    GenerateFnInput(state=state, sample=sample, sampling_params=sampling_params, evaluation=evaluation)
+                )
                 sample = output.samples
             else:
                 sample = await generate(args, sample, sampling_params)
