@@ -184,6 +184,28 @@ try:
                 provider.moe_shared_expert_intermediate_size = (
                     int(provider.moe_ffn_hidden_size) * int(hf.n_shared_experts)
                 )
+            # Pull routing hyperparameters directly from HF config. miles' generic
+            # model_provider.py only copies a couple of moe_* args to the provider,
+            # so without this Megatron runs with scaling_factor=None which silently
+            # makes every MoE block 2.5x smaller than HF (0.28 logprob drift at
+            # rollout time).
+            rsf = getattr(hf, "routed_scaling_factor", None)
+            if rsf is not None:
+                provider.moe_router_topk_scaling_factor = float(rsf)
+            n_group = getattr(hf, "n_group", None)
+            if n_group is not None:
+                provider.moe_router_num_groups = int(n_group)
+            topk_group = getattr(hf, "topk_group", None)
+            if topk_group is not None:
+                provider.moe_router_group_topk = int(topk_group)
+            if getattr(hf, "norm_topk_prob", None) is not None:
+                # Megatron's sigmoid path normalizes topk_prob when topk>1;
+                # there's no separate flag. Leave as-is but record for clarity.
+                pass
+            provider.moe_router_dtype = "fp32"
+            # pre_softmax is a softmax-path flag; irrelevant for sigmoid routing.
+            # Upstream miles model_provider already passes --moe-router-bias-update-rate
+            # and --moe-aux-loss-coeff through to the provider.
         return provider
 
     def _miles_nh_mapping_registry(self):
