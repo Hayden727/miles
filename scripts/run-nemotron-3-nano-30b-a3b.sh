@@ -92,6 +92,10 @@ WANDB_ARGS=()
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.7
+   # Replay the exact rollout routing during training forward so
+   # train logprobs match rollout logprobs (needed for MoE).
+   --use-miles-router
+   --use-rollout-routing-replay
 )
 
 MISC_ARGS=(

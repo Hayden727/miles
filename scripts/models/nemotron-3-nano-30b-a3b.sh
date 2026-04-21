@@ -33,16 +33,15 @@ MODEL_ARGS=(
    --moe-router-enable-expert-bias
    --moe-grouped-gemm
    --moe-router-dtype fp32
-   # Group-limited routing (DeepSeek-style): config has n_groups=8, topk_group=1,
-   # routed_scaling_factor=2.5. Missing these diverges training routing from
-   # sglang's routing → huge train/rollout logprob mismatch.
-   --moe-router-num-groups 8
+   # Routing: config has n_group=1 (MoE groups), topk_group=1,
+   # routed_scaling_factor=2.5. `n_groups=8` is Mamba groups — unrelated to MoE.
+   # With n_group=1, group-limited routing is a no-op (single group of 128).
+   --moe-router-num-groups 1
    --moe-router-group-topk 1
    --moe-router-topk-scaling-factor 2.5
    --moe-router-pre-softmax
-   # DS-v3-style aux-free balancing: disable the default aux_loss which
-   # perturbs router scores with an auxiliary balance term that HF inference
-   # does not apply.
-   --moe-router-load-balancing-type none
+   # Match glm4.7-flash (known-working MoE RL) settings more closely.
+   --moe-router-load-balancing-type seq_aux_loss
+   --moe-router-bias-update-rate 0
    --moe-aux-loss-coeff 0
 )

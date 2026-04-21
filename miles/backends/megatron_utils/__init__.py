@@ -161,6 +161,16 @@ try:
         if n_exp > 0:
             provider.num_moe_experts = int(n_exp)
             provider.moe_router_topk = int(hf.num_experts_per_tok)
+            # For Mamba-hybrid, `hybrid_override_pattern` (e.g. "MEMEM*...")
+            # drives which positions are MoE. Mirror to `moe_layer_freq` so
+            # miles' replay_utils.py can detect MoE layers correctly.
+            pat = getattr(provider, "hybrid_override_pattern", None) or getattr(
+                hf, "hybrid_override_pattern", None
+            )
+            if pat:
+                provider.moe_layer_freq = [1 if ch == "E" else 0 for ch in pat][
+                    : int(provider.num_layers)
+                ]
             provider.moe_router_score_function = "sigmoid"
             provider.moe_router_enable_expert_bias = True
             provider.moe_grouped_gemm = True
@@ -218,6 +228,25 @@ try:
 
     _MilesNHBridge.provider_bridge = _miles_nh_provider_bridge
     _MilesNHBridge.mapping_registry = _miles_nh_mapping_registry
+
+    # One-shot expert_bias magnitude check on first router forward.
+    try:
+        from megatron.core.transformer.moe.router import TopKRouter as _MilesRouter
+        _orig_router_fwd = _MilesRouter.forward
+        _miles_router_logged = [False]
+        def _miles_router_fwd(self, *args, **kwargs):
+            if (not _miles_router_logged[0]) and hasattr(self, 'expert_bias') and self.expert_bias is not None:
+                eb = self.expert_bias
+                _miles_sys.stderr.write(
+                    f">>> miles router-diag: expert_bias abs.max={eb.abs().max().item():.4f} "
+                    f"abs.mean={eb.abs().mean().item():.4f} shape={tuple(eb.shape)} dtype={eb.dtype}\n"
+                )
+                _miles_sys.stderr.flush()
+                _miles_router_logged[0] = True
+            return _orig_router_fwd(self, *args, **kwargs)
+        _MilesRouter.forward = _miles_router_fwd
+    except Exception as _e:
+        logging.warning("expert_bias router-diag shim not applied: %s", _e)
     _miles_sys.stderr.write(">>> miles nemotron_h attn-shim: installed\n")
     _miles_sys.stderr.flush()
 except Exception as _e:  # best-effort shim
