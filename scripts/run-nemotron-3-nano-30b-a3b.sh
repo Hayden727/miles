@@ -25,7 +25,7 @@ source "${SCRIPT_DIR}/models/nemotron-3-nano-30b-a3b.sh"
 
 MODEL_DIR=/cluster_public/miles_data/models/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
 # CELL=ep4 (TP=1 PP=1 CP=1 EP=4 DP=2)
-OUT_DIR=/cluster_personal/zhichen/ckpts/nemotron-3-nano-30b-a3b-ep4
+OUT_DIR=/cluster_personal/zhichen/ckpts/nemotron-3-nano-30b-a3b-tp2ep4
 
 CKPT_ARGS=(
    --hf-checkpoint $MODEL_DIR
@@ -44,10 +44,10 @@ ROLLOUT_ARGS=(
    --rm-type deepscaler
    --num-rollout 10
    --rollout-batch-size 32
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 4096
+   --n-samples-per-prompt 4
+   --rollout-max-response-len 1024
    --rollout-temperature 1
-   --global-batch-size 256
+   --global-batch-size 128
    --balance-data
 )
 
@@ -55,7 +55,8 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
+   --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 4
@@ -64,8 +65,8 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 2048
-   --log-probs-chunk-size 512
+   --max-tokens-per-gpu 1024
+   --log-probs-chunk-size 128
 )
 
 GRPO_ARGS=(
