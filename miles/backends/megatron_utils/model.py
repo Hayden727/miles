@@ -1,5 +1,6 @@
 import dataclasses
 import gc
+import inspect
 import logging
 import math
 from argparse import Namespace
@@ -8,6 +9,25 @@ from functools import partial
 from pathlib import Path
 
 import torch
+
+
+def _model_accepts_loss_mask(model):
+    """True if the innermost wrapped forward() declares a `loss_mask` parameter.
+
+    MambaModel (used by bridge-loaded nemotron_h) does not accept loss_mask,
+    while miles' custom GPTModel path does. The loss function uses loss_mask
+    downstream regardless, so we only drop the kwarg on the model call itself.
+    """
+    inner = model
+    for _ in range(5):
+        if hasattr(inner, "module"):
+            inner = inner.module
+        else:
+            break
+    try:
+        return "loss_mask" in inspect.signature(inner.forward).parameters
+    except (ValueError, TypeError):
+        return True
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import finalize_model_grads
@@ -252,15 +272,18 @@ def forward_only(
         packed_seq_params = get_packed_seq_params(batch, args)
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
-        output_tensor = model(
+        _fwd_kwargs = dict(
             input_ids=tokens,
             position_ids=None,
             attention_mask=None,
             labels=None,
             packed_seq_params=packed_seq_params,
-            loss_mask=batch["full_loss_masks"],
-            **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
         )
+        if _model_accepts_loss_mask(model):
+            _fwd_kwargs["loss_mask"] = batch["full_loss_masks"]
+        if batch["multimodal_train_inputs"] is not None:
+            _fwd_kwargs.update(batch["multimodal_train_inputs"])
+        output_tensor = model(**_fwd_kwargs)
 
         return output_tensor, partial(
             f,
@@ -403,16 +426,19 @@ def train_one_step(
         for m in all_replay_managers:
             m.stage = "replay_forward"
 
+        _supports_loss_mask = _model_accepts_loss_mask(model)
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
-            output_tensor = model.build_schedule_plan(
+            _sched_kwargs = dict(
                 input_ids=batch["tokens"],
                 position_ids=None,
                 attention_mask=None,
                 labels=None,
                 packed_seq_params=get_packed_seq_params(batch, args),
-                loss_mask=batch["full_loss_masks"],
             )
+            if _supports_loss_mask:
+                _sched_kwargs["loss_mask"] = batch["full_loss_masks"]
+            output_tensor = model.build_schedule_plan(**_sched_kwargs)
         else:
             forward_kwargs = {
                 "input_ids": batch["tokens"],
@@ -420,8 +446,9 @@ def train_one_step(
                 "attention_mask": None,
                 "labels": None,
                 "packed_seq_params": get_packed_seq_params(batch, args),
-                "loss_mask": batch["full_loss_masks"],
             }
+            if _supports_loss_mask:
+                forward_kwargs["loss_mask"] = batch["full_loss_masks"]
 
             if args.enable_mtp_training:
                 forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
