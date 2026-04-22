@@ -74,10 +74,10 @@ async def run(
     try:
         response = await asyncio.wait_for(
             post(f"{agent_server_url}/run", request),
-            timeout=3600,  # 1 hour max per trial
+            timeout=5400,  # 1.5 hour max per trial
         )
     except asyncio.TimeoutError:
-        logger.error("Agent server call timed out after 3600s")
+        logger.error("Agent server call timed out after 5400s")
         return None
     except asyncio.CancelledError:
         logger.warning("Agent server call cancelled (sibling task failure?)")
