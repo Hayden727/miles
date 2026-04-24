@@ -199,6 +199,7 @@ def forward_only(
     Returns:
         Aggregated outputs keyed by ``store_prefix + key``.
     """
+
     # reset data iterator
     for iterator in data_iterator:
         iterator.reset()
@@ -386,6 +387,8 @@ def train_one_step(
             args.qkv_format,
             allgather_cp=args.allgather_cp,
         )
+        batch["debug_rollout_id"] = rollout_id
+        batch["debug_step_id"] = step_id
 
         from miles.utils.replay_base import all_replay_managers
 

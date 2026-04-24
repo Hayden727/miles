@@ -41,6 +41,15 @@ def convert_checkpoint(
 
     multinode_args = ""
     if multinode:
+        # This variable can be provided via:
+        # `export SLURM_JOB_HOSTNAMES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")`
+        print(f"{os.environ.get('SLURM_JOB_HOSTNAMES')=} {os.environ.get('SLURM_NODEID')=}")
+        hostnames_raw = os.environ["SLURM_JOB_HOSTNAMES"].strip()
+        job_hostnames = hostnames_raw.split(",") if "," in hostnames_raw else hostnames_raw.split("\n")
+        master_addr = job_hostnames[0]  # noqa: F841
+        nnodes = len(job_hostnames)  # noqa: F841
+        node_rank = int(os.environ["SLURM_NODEID"])  # noqa: F841
+
         multinode_args = (
             "--master-addr {{master_addr}} " "--master-port 23456 " "--nnodes={{nnodes}} " "--node-rank {{node_rank}} "
         )
@@ -112,6 +121,16 @@ def execute_train(
         train_script = f"{repo_base_dir}/{train_script}"
     external_ray = get_bool_env_var("MILES_SCRIPT_EXTERNAL_RAY")
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    if external_ray and master_addr == "127.0.0.1":
+        # In external Ray (e.g. rcli/KubeRay), resolve the actual head IP for multi-node NCCL
+        import socket
+
+        master_addr = socket.gethostbyname(socket.gethostname())
+        os.environ["MASTER_ADDR"] = master_addr
+        print(f"External Ray: resolved MASTER_ADDR to {master_addr}")
+
+    print("HACK: disable RAY_DEDUP_LOGS")
+    os.environ["RAY_DEDUP_LOGS"] = "0"
 
     train_backend_fsdp = "--train-backend fsdp" in train_args
     assert train_backend_fsdp == (megatron_model_type is None)
@@ -137,7 +156,7 @@ def execute_train(
         exec_command(
             # will prevent ray from buffering stdout/stderr
             f"export PYTHONBUFFERED=16 && "
-            f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
+            f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --port 6399 --dashboard-port 8266 --disable-usage-stats"
         )
 
     if (f := before_ray_job_submit) is not None:
@@ -181,10 +200,11 @@ def execute_train(
             if megatron_model_type is not None
             else ""
         )
+        ray_dashboard_port = 8265 if external_ray else 8266
         exec_command(
             f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
             f"{cmd_megatron_model_source}"
-            f'ray job submit --address="http://127.0.0.1:8265" '
+            f'ray job submit --address="http://127.0.0.1:{ray_dashboard_port}" '
             f"--runtime-env-json='{runtime_env_json}' "
             f"-- python3 {train_script} "
             f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
