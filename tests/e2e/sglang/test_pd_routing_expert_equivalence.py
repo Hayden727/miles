@@ -8,12 +8,11 @@ For each model, run the same rollout workload twice under
 ``--debug-rollout-only --sglang-enable-deterministic-inference
 --use-rollout-routing-replay``:
 
-1. ``variant=pd_off``: ``--rollout-num-gpus-per-engine 1`` (single engine,
-   no PD disaggregation).
-2. ``variant=pd_on``: ``--prefill-num-servers 1`` with two rollout GPUs —
-   one prefill server + one decode server. Requires the Rust gateway to
-   include PR #4 so that ``return_routed_experts`` is propagated across
-   the prefill/decode boundary.
+1. ``variant=pd_off``: one 4-GPU rollout engine, no PD disaggregation.
+2. ``variant=pd_on``: ``--prefill-num-servers 1`` with two 4-GPU rollout
+   engines — one prefill server + one decode server. Requires the Rust
+   gateway to include PR #4 so that ``return_routed_experts`` is
+   propagated across the prefill/decode boundary.
 
 Each run writes a JSONL of per-sample ``(tokens, rollout_log_probs,
 rollout_routed_experts)`` via ``utils.router_equivalence_generate``; we
@@ -28,8 +27,9 @@ and ``args.moe_router_topk`` — which the rollout-side
 ``--kl-coef`` > 0, which is what gates the ``--ref-load`` existence
 check in ``miles/utils/arguments.py``, and ``--debug-rollout-only``
 makes ``_compute_megatron_num_gpus`` return ``0`` so no megatron actor
-is spawned and the checkpoint is never loaded.  This lets us get away
-with a single/dual H200 and no ``convert_hf_to_torch_dist`` step.
+is spawned and the checkpoint is never loaded.  This still exercises the
+same rollout code path while letting the test focus on router /
+disaggregation correctness.
 
 PD transport
 ~~~~~~~~~~~~
@@ -43,8 +43,8 @@ also what production uses (see ``scripts/run_glm5_744b_a40b.py``).
 Controls
 ~~~~~~~~
 - ``PD_EQ_MODEL_FAMILY``: ``qwen3_30b_a3b`` (default) | ``glm47_flash``.
-- PD variant uses 2 H200s (1 prefill + 1 decode); PD-off uses 1 H200.
-  Both variants keep TP=1 so deterministic inference should match.
+- Both families run with 4-way TP per rollout engine. ``pd_off`` uses
+  4 H200s; ``pd_on`` uses 8 H200s (4 prefill + 4 decode).
 """
 
 import base64
@@ -61,6 +61,8 @@ DUMP_ROOT = Path(os.environ.get("PD_EQ_DUMP_ROOT", "/tmp/pd-eq"))
 PROMPT_DATA_PATH = "/root/datasets/dapo-math-17k/dapo-math-17k.jsonl"
 NUM_PROMPTS = int(os.environ.get("PD_EQ_NUM_PROMPTS", "10"))
 MAX_RESPONSE_LEN = int(os.environ.get("PD_EQ_MAX_RESPONSE_LEN", "256"))
+TP_SIZE = int(os.environ.get("PD_EQ_TP_SIZE", "4"))
+ROLLOUT_GPUS_PER_ENGINE = int(os.environ.get("PD_EQ_ROLLOUT_GPUS_PER_ENGINE", str(TP_SIZE)))
 
 # Repo root (tests/e2e/sglang/test_*.py → parents[3]).  Used to prepend the
 # miles repo onto the Ray actor PYTHONPATH so the custom generate function is
@@ -131,7 +133,7 @@ def _build_train_args(cfg: ModelConfig, variant: str) -> tuple[str, int]:
         f"--rollout-batch-size {NUM_PROMPTS} "
         "--n-samples-per-prompt 1 "
         f"--rollout-max-response-len {MAX_RESPONSE_LEN} "
-        "--rollout-temperature 0.0 "
+        "--rollout-temperature 1 "
         f"--global-batch-size {NUM_PROMPTS} "
         "--rollout-seed 42 "
     )
@@ -140,37 +142,34 @@ def _build_train_args(cfg: ModelConfig, variant: str) -> tuple[str, int]:
 
     router_args = "--use-rollout-routing-replay "
 
-    # Megatron parallelism args — 1 GPU per engine, no parallelism.
-    # Not consumed by anything under --debug-rollout-only beyond arg parsing.
+    # Run both families at TP=4 so both variants use the same 4-card
+    # inference topology per engine.
     perf_args = (
-        "--tensor-model-parallel-size 1 "
+        f"--tensor-model-parallel-size {TP_SIZE} "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 1 "
-        "--expert-model-parallel-size 1 "
+        "--expert-model-parallel-size 4 "
         "--expert-tensor-parallel-size 1 "
     )
 
     if variant == "pd_on":
-        # Pin the mooncake HCA to the PIX-neighbour of GPU 0 (prefill). Without
-        # the pin, mooncake's auto-discovery picks ``mlx5_bond_0`` — a LAG
-        # device whose UMR QP registration fails. Decode (GPU 1, PIX-neighbour
-        # ``mlx5_1``) shares the same HCA, which crosses one PXB but works
-        # functionally.
+        # Pin mooncake to a known-good HCA. Without the pin, auto-discovery can
+        # pick ``mlx5_bond_0`` — a LAG device whose UMR QP registration fails.
         sglang_args = (
-            "--rollout-num-gpus-per-engine 1 "
+            f"--rollout-num-gpus-per-engine {ROLLOUT_GPUS_PER_ENGINE} "
             "--prefill-num-servers 1 "
             "--sglang-disaggregation-ib-device mlx5_0 "
             "--sglang-enable-deterministic-inference "
-            "--sglang-mem-fraction-static 0.85 "
+            f"--sglang-mem-fraction-static 0.7 "
         )
-        num_gpus = 2
+        num_gpus = 2 * ROLLOUT_GPUS_PER_ENGINE
     elif variant == "pd_off":
         sglang_args = (
-            "--rollout-num-gpus-per-engine 1 "
+            f"--rollout-num-gpus-per-engine {ROLLOUT_GPUS_PER_ENGINE} "
             "--sglang-enable-deterministic-inference "
-            "--sglang-mem-fraction-static 0.85 "
+            f"--sglang-mem-fraction-static 0.7 "
         )
-        num_gpus = 1
+        num_gpus = ROLLOUT_GPUS_PER_ENGINE
     else:
         raise ValueError(f"unknown variant {variant!r}")
 
@@ -196,18 +195,19 @@ def _run_variant(cfg: ModelConfig, variant: str) -> None:
     dump_path = _variant_dump_path(variant)
 
     train_args, num_gpus = _build_train_args(cfg, variant)
+    extra_env = {
+        # Ray actor default PYTHONPATH is Megatron-only; prepend the miles
+        # repo so the custom generate function under ``tests.e2e.sglang.*``
+        # is importable inside ``RolloutManager``.
+        "PYTHONPATH": f"{_REPO_ROOT}:/root/Megatron-LM",
+        "MILES_ROUTER_EQ_DUMP_PATH": str(dump_path),
+        "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
+    }
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=num_gpus,
         megatron_model_type=cfg.megatron_model_type,
-        extra_env_vars={
-            # Ray actor default PYTHONPATH is Megatron-only; prepend the miles
-            # repo so the custom generate function under ``tests.e2e.sglang.*``
-            # is importable inside ``RolloutManager``.
-            "PYTHONPATH": f"{_REPO_ROOT}:/root/Megatron-LM",
-            "MILES_ROUTER_EQ_DUMP_PATH": str(dump_path),
-            "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
-        },
+        extra_env_vars=extra_env,
     )
 
 
