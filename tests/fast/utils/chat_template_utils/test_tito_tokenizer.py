@@ -50,10 +50,12 @@ from pathlib import Path
 import pytest
 from transformers import AutoTokenizer
 
-from miles.utils.chat_template_utils import MismatchType, apply_chat_template, try_get_fixed_chat_template
+from miles.utils.chat_template_utils import MismatchType, apply_chat_template, resolve_fixed_chat_template
 from miles.utils.chat_template_utils.tito_tokenizer import (
     GLM47TITOTokenizer,
     Qwen3TITOTokenizer,
+    Qwen35TITOTokenizer,
+    QwenNextTITOTokenizer,
     TITOTokenizer,
     TITOTokenizerType,
     _build_dummy_assistant,
@@ -78,8 +80,8 @@ from miles.utils.test_utils.mock_trajectories import (
 _TOK_CACHE: dict[tuple[str, str | None], AutoTokenizer] = {}
 
 
-def _get_tokenizer(model_id: str) -> AutoTokenizer:
-    chat_template_path = try_get_fixed_chat_template(model_id)
+def _get_tokenizer(model_id: str, tito_type: TITOTokenizerType | None = None) -> AutoTokenizer:
+    chat_template_path = resolve_fixed_chat_template(tito_type, ["tool"]) if tito_type is not None else None
     cache_key = (model_id, chat_template_path)
     if cache_key not in _TOK_CACHE:
         _TOK_CACHE[cache_key] = load_tokenizer(
@@ -98,9 +100,9 @@ def _get_tokenizer(model_id: str) -> AutoTokenizer:
 # for tests specific to one subclass's boundary logic.
 # ---------------------------------------------------------------------------
 
-_TITO_MODELS: dict[str, tuple[str, type[TITOTokenizer]]] = {
-    "qwen3": ("Qwen/Qwen3-4B", Qwen3TITOTokenizer),
-    "glm47": ("zai-org/GLM-4.7-Flash", GLM47TITOTokenizer),
+_TITO_MODELS: dict[str, tuple[str, type[TITOTokenizer], TITOTokenizerType]] = {
+    "qwen3": ("Qwen/Qwen3-4B", Qwen3TITOTokenizer, TITOTokenizerType.QWEN3),
+    "glm47": ("zai-org/GLM-4.7-Flash", GLM47TITOTokenizer, TITOTokenizerType.GLM47),
 }
 
 
@@ -109,18 +111,24 @@ _ALLOWED_APPEND_ROLES = ["tool", "user", "system"]
 
 @pytest.fixture(params=list(_TITO_MODELS.keys()))
 def tito(request) -> TITOTokenizer:
-    model_id, cls = _TITO_MODELS[request.param]
-    return cls(_get_tokenizer(model_id), allowed_append_roles=_ALLOWED_APPEND_ROLES)
+    model_id, cls, tito_type = _TITO_MODELS[request.param]
+    return cls(_get_tokenizer(model_id, tito_type), allowed_append_roles=_ALLOWED_APPEND_ROLES)
 
 
 @pytest.fixture
 def qwen3_tito() -> Qwen3TITOTokenizer:
-    return Qwen3TITOTokenizer(_get_tokenizer("Qwen/Qwen3-4B"), allowed_append_roles=_ALLOWED_APPEND_ROLES)
+    return Qwen3TITOTokenizer(
+        _get_tokenizer("Qwen/Qwen3-4B", TITOTokenizerType.QWEN3),
+        allowed_append_roles=_ALLOWED_APPEND_ROLES,
+    )
 
 
 @pytest.fixture
 def glm47_tito() -> GLM47TITOTokenizer:
-    return GLM47TITOTokenizer(_get_tokenizer("zai-org/GLM-4.7-Flash"), allowed_append_roles=_ALLOWED_APPEND_ROLES)
+    return GLM47TITOTokenizer(
+        _get_tokenizer("zai-org/GLM-4.7-Flash", TITOTokenizerType.GLM47),
+        allowed_append_roles=_ALLOWED_APPEND_ROLES,
+    )
 
 
 @pytest.fixture
@@ -453,6 +461,8 @@ class TestFactory:
         "type_str, model_id, cls",
         [
             ("qwen3", "Qwen/Qwen3-4B", Qwen3TITOTokenizer),
+            ("qwen35", "Qwen/Qwen3-4B", Qwen35TITOTokenizer),
+            ("qwennext", "Qwen/Qwen3-4B", QwenNextTITOTokenizer),
             ("glm47", "zai-org/GLM-4.7-Flash", GLM47TITOTokenizer),
             ("default", "Qwen/Qwen3-4B", TITOTokenizer),
         ],
@@ -464,6 +474,18 @@ class TestFactory:
     def test_enum_input(self):
         """Enum values work the same as string values."""
         tito = get_tito_tokenizer(_get_tokenizer("Qwen/Qwen3-4B"), tokenizer_type=TITOTokenizerType.QWEN3)
+        assert isinstance(tito, Qwen3TITOTokenizer)
+
+    @pytest.mark.parametrize(
+        "type_str, cls",
+        [("qwen35", Qwen35TITOTokenizer), ("qwennext", QwenNextTITOTokenizer)],
+    )
+    def test_qwen_variant_inherits_qwen3_boundary_logic(self, type_str, cls):
+        """Qwen3.5 / Qwen3-Next reuse Qwen3's boundary handling via inheritance.
+        The named subclass exists so fixed_templates can key on (tito_model,
+        surface) — but token-level merge behavior is identical to Qwen3."""
+        tito = get_tito_tokenizer(_get_tokenizer("Qwen/Qwen3-4B"), tokenizer_type=type_str)
+        assert isinstance(tito, cls)
         assert isinstance(tito, Qwen3TITOTokenizer)
 
     def test_invalid_type_raises(self):

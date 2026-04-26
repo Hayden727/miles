@@ -24,7 +24,7 @@ from sglang.srt.entrypoints.openai.protocol import ChatCompletionRequest
 from sglang.srt.entrypoints.openai.serving_chat import OpenAIServingChat
 from transformers import AutoTokenizer
 
-from miles.utils.chat_template_utils.autofix import try_get_fixed_chat_template
+from miles.utils.chat_template_utils import TITOTokenizerType, resolve_fixed_chat_template
 from miles.utils.chat_template_utils.template import apply_chat_template
 from miles.utils.test_utils.chat_template_verify import CaseSpec, expand_runs, format_case_id
 from miles.utils.test_utils.mock_trajectories import SimpleNoToolTrajectory, SingleToolTrajectory
@@ -81,9 +81,11 @@ def _get_tokenizer(model_id: str) -> AutoTokenizer:
     return _TOK_CACHE[model_id]
 
 
-def _load_fixed_or_none(hf_id: str) -> str | None:
-    """Return the bundled fixed chat-template content for *hf_id*, or ``None``."""
-    path = try_get_fixed_chat_template(hf_id)
+def _load_fixed_or_none(tito_model: TITOTokenizerType | None) -> str | None:
+    """Return the bundled fixed chat-template content for *tito_model*, or ``None``."""
+    if tito_model is None:
+        return None
+    path = resolve_fixed_chat_template(tito_model, ["tool"])
     if path is None:
         return None
     with open(path) as f:
@@ -94,25 +96,28 @@ def _load_fixed_or_none(hf_id: str) -> str | None:
 # Per-model declarations
 # ---------------------------------------------------------------------------
 #
-# (model_id, supports_thinking, use_fixed_template, allowed_append_roles)
+# (model_id, supports_thinking, fixed_template_tito_model, allowed_append_roles)
 #
-# ``allowed_append_roles`` reflects the set of append-role combinations the
-# model's template can render without raising — test asserts that the
-# sglang path and our path produce identical tokens on all such cases.
-# Qwen3.5-4B uses the bundled fixed template which raises on intermediate
-# system post-revert, so the role set is narrowed to {tool} only.
+# ``fixed_template_tito_model`` is ``None`` when the model uses its native HF
+# template; set to a ``TITOTokenizerType`` when the test should swap in the
+# bundled fixed template registered for that family.  ``allowed_append_roles``
+# reflects the set of append-role combinations the model's template can render
+# without raising — test asserts that the sglang path and our path produce
+# identical tokens on all such cases.  Qwen3.5-4B uses the bundled fixed
+# template which raises on intermediate system post-revert, so the role set
+# is narrowed to {tool} only.
 
-_MODELS: list[tuple[str, bool, bool, frozenset[str]]] = [
-    ("Qwen/Qwen3-4B", True, False, frozenset({"tool", "user", "system"})),
-    ("zai-org/GLM-4.7-Flash", True, False, frozenset({"tool", "user", "system"})),
-    ("Qwen/Qwen3.5-4B", True, True, frozenset({"tool"})),
-    ("Qwen/Qwen3-Coder-Next", False, False, frozenset({"tool", "user", "system"})),
+_MODELS: list[tuple[str, bool, TITOTokenizerType | None, frozenset[str]]] = [
+    ("Qwen/Qwen3-4B", True, None, frozenset({"tool", "user", "system"})),
+    ("zai-org/GLM-4.7-Flash", True, None, frozenset({"tool", "user", "system"})),
+    ("Qwen/Qwen3.5-4B", True, TITOTokenizerType.QWEN35, frozenset({"tool"})),
+    ("Qwen/Qwen3-Coder-Next", False, None, frozenset({"tool", "user", "system"})),
 ]
 
 
 def _build_align_params():
     params = []
-    for model_id, supports_thinking, use_fixed, allowed_roles in _MODELS:
+    for model_id, supports_thinking, fixed_tito, allowed_roles in _MODELS:
         short = model_id.split("/")[-1]
         for case, kwargs in expand_runs(supports_thinking=supports_thinking, allowed_append_roles=allowed_roles):
             # SimpleNoTool ends with a plain assistant message (no tool_calls).
@@ -123,12 +128,12 @@ def _build_align_params():
             if case.traj_cls is SimpleNoToolTrajectory:
                 continue
             ident = f"{short}-{format_case_id(case, kwargs)}"
-            params.append(pytest.param(model_id, use_fixed, case, kwargs, id=ident))
+            params.append(pytest.param(model_id, fixed_tito, case, kwargs, id=ident))
     return params
 
 
 def _per_model_params():
-    return [pytest.param(model_id, use_fixed, id=model_id.split("/")[-1]) for model_id, _, use_fixed, _ in _MODELS]
+    return [pytest.param(model_id, fixed_tito, id=model_id.split("/")[-1]) for model_id, _, fixed_tito, _ in _MODELS]
 
 
 # ---------------------------------------------------------------------------
@@ -157,17 +162,17 @@ def _assert_aligned(tokenizer, case: CaseSpec, kwargs: dict, chat_template: str 
 class TestAlignWithSGLang:
     """apply_chat_template must produce identical prompt_ids to SGLang's pipeline."""
 
-    @pytest.mark.parametrize("model_id, use_fixed, case, kwargs", _build_align_params())
-    def test_align(self, model_id, use_fixed, case, kwargs):
+    @pytest.mark.parametrize("model_id, fixed_tito, case, kwargs", _build_align_params())
+    def test_align(self, model_id, fixed_tito, case, kwargs):
         tokenizer = _get_tokenizer(model_id)
-        chat_template = _load_fixed_or_none(model_id) if use_fixed else None
+        chat_template = _load_fixed_or_none(fixed_tito)
         _assert_aligned(tokenizer, case, kwargs, chat_template)
 
-    @pytest.mark.parametrize("model_id, use_fixed", _per_model_params())
-    def test_json_string_arguments(self, model_id, use_fixed):
+    @pytest.mark.parametrize("model_id, fixed_tito", _per_model_params())
+    def test_json_string_arguments(self, model_id, fixed_tito):
         """JSON-string tool_call arguments should produce same IDs as dict arguments."""
         tokenizer = _get_tokenizer(model_id)
-        chat_template = _load_fixed_or_none(model_id) if use_fixed else None
+        chat_template = _load_fixed_or_none(fixed_tito)
         extra = {"chat_template": chat_template} if chat_template else {}
         messages = [
             {"role": "user", "content": "weather?"},
@@ -197,11 +202,11 @@ class TestAlignWithSGLang:
         actual = apply_chat_template(messages, tokenizer=tokenizer, tools=tools, tokenize=True, **extra)
         assert actual == expected
 
-    @pytest.mark.parametrize("model_id, use_fixed", _per_model_params())
-    def test_no_tools(self, model_id, use_fixed):
+    @pytest.mark.parametrize("model_id, fixed_tito", _per_model_params())
+    def test_no_tools(self, model_id, fixed_tito):
         """Plain conversation without tools."""
         tokenizer = _get_tokenizer(model_id)
-        chat_template = _load_fixed_or_none(model_id) if use_fixed else None
+        chat_template = _load_fixed_or_none(fixed_tito)
         extra = {"chat_template": chat_template} if chat_template else {}
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -211,8 +216,8 @@ class TestAlignWithSGLang:
         actual = apply_chat_template(messages, tokenizer=tokenizer, tokenize=True, **extra)
         assert actual == expected
 
-    @pytest.mark.parametrize("model_id, use_fixed", _per_model_params())
-    def test_does_not_mutate_input(self, model_id, use_fixed):
+    @pytest.mark.parametrize("model_id, fixed_tito", _per_model_params())
+    def test_does_not_mutate_input(self, model_id, fixed_tito):
         tokenizer = _get_tokenizer(model_id)
         messages = copy.deepcopy(SingleToolTrajectory.MESSAGES)
         tools = copy.deepcopy(SingleToolTrajectory.TOOLS)

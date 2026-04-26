@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import pytest
 from transformers import AutoTokenizer
 
-from miles.utils.chat_template_utils import MismatchType, apply_chat_template, try_get_fixed_chat_template
+from miles.utils.chat_template_utils import MismatchType, apply_chat_template, resolve_fixed_chat_template
 from miles.utils.chat_template_utils.tito_tokenizer import TITOTokenizer, TITOTokenizerType, get_tito_tokenizer
 from miles.utils.processing_utils import load_tokenizer
 from miles.utils.test_utils.mock_trajectories import (
@@ -153,7 +153,10 @@ def _resolve_tito_type(model_name: str) -> TITOTokenizerType:
 
 
 def _get_tokenizer(model_name: str) -> AutoTokenizer:
-    chat_template_path = try_get_fixed_chat_template(model_name)
+    # _resolve_tito_type returns DEFAULT for non-mapped models, and resolve
+    # returns None for any (DEFAULT, ...) lookup, so this naturally degrades
+    # to "no fixed template" without an extra branch.
+    chat_template_path = resolve_fixed_chat_template(_resolve_tito_type(model_name), ["tool"])
     cache_key = (model_name, chat_template_path)
     if cache_key not in _TOK_CACHE:
         _TOK_CACHE[cache_key] = load_tokenizer(

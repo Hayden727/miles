@@ -9,8 +9,9 @@ Usage examples::
     # Verify a HuggingFace model's chat template
     python scripts/tools/verify_chat_template.py --model Qwen/Qwen3-0.6B
 
-    # Verify with autofix (use our fixed template if available)
-    python scripts/tools/verify_chat_template.py --model Qwen/Qwen3-0.6B --autofix
+    # Resolve a bundled fixed template for a TITO tokenizer family
+    python scripts/tools/verify_chat_template.py --model Qwen/Qwen3-0.6B \\
+        --tito-model qwen3 --tito-allowed-append-roles tool
 
     # Restrict which append roles the session is allowed to use (tool is implicit)
     python scripts/tools/verify_chat_template.py --model Qwen/Qwen3-0.6B \\
@@ -25,18 +26,20 @@ from __future__ import annotations
 import argparse
 import sys
 
+from miles.utils.chat_template_utils.tito_tokenizer import TITOTokenizerType
+
 
 def _load_template_from_file(path: str) -> str:
     with open(path) as f:
         return f.read()
 
 
-def _load_template_from_model(model_id: str, *, autofix: bool) -> tuple[str, str]:
+def _load_template_from_model(model_id: str, *, tito_model: str | None, allowed_roles: list[str]) -> tuple[str, str]:
     """Load chat template for a HF model. Returns (template_str, source_description)."""
-    if autofix:
-        from miles.utils.chat_template_utils.autofix import try_get_fixed_chat_template
+    if tito_model:
+        from miles.utils.chat_template_utils import resolve_fixed_chat_template
 
-        fixed_path = try_get_fixed_chat_template(model_id)
+        fixed_path = resolve_fixed_chat_template(tito_model, allowed_roles)
         if fixed_path:
             return _load_template_from_file(fixed_path), f"fixed template: {fixed_path}"
 
@@ -88,9 +91,14 @@ def main() -> int:
     )
 
     parser.add_argument(
-        "--autofix",
-        action="store_true",
-        help="When using --model, apply our fixed template if one exists.",
+        "--tito-model",
+        choices=[t.value for t in TITOTokenizerType],
+        default=None,
+        help=(
+            "When using --model, look up a bundled fixed template registered for this "
+            "TITO tokenizer family under the given --tito-allowed-append-roles surface. "
+            "Falls back to the HF default chat template when no entry is registered."
+        ),
     )
     parser.add_argument(
         "--tito-allowed-append-roles",
@@ -101,7 +109,7 @@ def main() -> int:
         help=(
             "Roles the session may append after an assistant turn.  'tool' is "
             "implicitly always allowed (listing it is fine).  Trajectories that "
-            "require roles outside this set are skipped.  Default: tool user system."
+            "require roles outside this set are skipped.  Default: tool."
         ),
     )
     parser.add_argument(
@@ -112,7 +120,7 @@ def main() -> int:
             "Thinking-mode filter.  off: non-thinking trajectories only.  "
             "on: thinking trajectories with enable_thinking=True.  "
             "both: non-thinking + thinking with enable_thinking={True,False}.  "
-            "Default: off."
+            "Default: on."
         ),
     )
     parser.add_argument(
@@ -137,7 +145,11 @@ def main() -> int:
         chat_template = _load_template_from_file(args.template)
         source_desc = f"file: {args.template}"
     else:
-        chat_template, source_desc = _load_template_from_model(args.model, autofix=args.autofix)
+        chat_template, source_desc = _load_template_from_model(
+            args.model,
+            tito_model=args.tito_model,
+            allowed_roles=args.tito_allowed_append_roles,
+        )
 
     allowed_roles = set(args.tito_allowed_append_roles) | {"tool"}
 

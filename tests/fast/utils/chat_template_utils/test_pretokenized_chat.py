@@ -11,7 +11,7 @@ from copy import deepcopy
 
 import pytest
 
-from miles.utils.chat_template_utils.autofix import try_get_fixed_chat_template
+from miles.utils.chat_template_utils import TITOTokenizerType, resolve_fixed_chat_template
 from miles.utils.chat_template_utils.template import load_hf_chat_template
 from miles.utils.test_utils.chat_template_verify import (
     CaseSpec,
@@ -28,9 +28,9 @@ from miles.utils.test_utils.mock_trajectories import (
 )
 
 
-def _load_fixed(hf_id: str) -> str:
-    path = try_get_fixed_chat_template(hf_id)
-    assert path is not None, f"try_get_fixed_chat_template should resolve {hf_id}"
+def _load_fixed(tito_model: TITOTokenizerType) -> str:
+    path = resolve_fixed_chat_template(tito_model, ["tool"])
+    assert path is not None, f"resolve_fixed_chat_template should resolve {tito_model.value}"
     with open(path) as f:
         return f.read()
 
@@ -55,10 +55,10 @@ def _load_fixed(hf_id: str) -> str:
 
 _TEMPLATES: list[tuple[str, str, bool, frozenset[str], dict]] = [
     # fixed templates: tool only
-    ("qwen3_fixed", _load_fixed("Qwen/Qwen3-0.6B"), True, frozenset({"tool"}), {}),
-    ("qwen3.5_fixed", _load_fixed("Qwen/Qwen3.5-0.8B"), True, frozenset({"tool"}), {}),
-    ("qwen3_thinking_2507_fixed", _load_fixed("Qwen/Qwen3-4B-Thinking-2507"), True, frozenset({"tool"}), {}),
-    ("qwen3_next_thinking_fixed", _load_fixed("Qwen/Qwen3-Next-80B-A3B-Thinking"), True, frozenset({"tool"}), {}),
+    ("qwen3_fixed", _load_fixed(TITOTokenizerType.QWEN3), True, frozenset({"tool"}), {}),
+    ("qwen3.5_fixed", _load_fixed(TITOTokenizerType.QWEN35), True, frozenset({"tool"}), {}),
+    ("qwen3_thinking_2507_fixed", _load_fixed(TITOTokenizerType.QWENNEXT), True, frozenset({"tool"}), {}),
+    ("qwen3_next_thinking_fixed", _load_fixed(TITOTokenizerType.QWENNEXT), True, frozenset({"tool"}), {}),
     # GLM thinking: default (tool only) + user-append variant with clear_thinking=False
     ("glm5", load_hf_chat_template("zai-org/GLM-5"), True, frozenset({"tool"}), {}),
     (

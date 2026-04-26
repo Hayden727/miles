@@ -624,12 +624,13 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 "--chat-template-path",
                 type=str,
                 default=None,
-                help="Path to a custom Jinja chat template file (.jinja), or 'autofix'. "
+                help="Path to an explicit custom Jinja chat template file (.jinja). "
                 "Sets tokenizer.chat_template when loading via load_tokenizer, "
                 "and also sets --sglang-chat-template so the sglang server uses the same template. "
-                "If set to 'autofix', Miles will automatically select a fixed chat template "
-                "maintained internally that resolves train-inference token mismatch issues "
-                "in agentic workflows (e.g. tool-call trajectories). "
+                "For Miles-maintained fixed templates, leave this unset and pass "
+                "--tito-model plus --tito-allowed-append-roles so Miles can auto-resolve "
+                "the registered template. The literal value 'autofix' is kept only as a "
+                "deprecated compatibility alias for that auto-resolve path. "
                 "The path must be accessible on all Ray worker nodes "
                 "(e.g. a path inside the miles repo, or a shared filesystem like NFS).",
             )
@@ -1836,15 +1837,54 @@ def miles_validate_args(args):
             "the canonical template output. Use at your own risk."
         )
 
+    # Resolve the fixed chat template from (tito_model, allowed_append_roles).
+    # ``--chat-template-path /path`` is treated as an explicit override and skips
+    # auto-resolution.  ``--chat-template-path autofix`` is a deprecated alias
+    # that warns and falls through to the same auto-resolve path used when no
+    # ``--chat-template-path`` is given; in both auto-resolve paths the caller
+    # must have set ``--tito-model`` to a non-default family so we know which
+    # jinja to pick — there is no longer any hf_checkpoint glob inference.
+    auto_resolve_tito_model: TITOTokenizerType | None = None
     if args.chat_template_path == "autofix":
-        from miles.utils.chat_template_utils import try_get_fixed_chat_template
+        logger.warning(
+            "--chat-template-path=autofix is deprecated; remove the flag and rely "
+            "on --tito-model + --tito-allowed-append-roles to auto-resolve. The "
+            "alias will be removed in a future release."
+        )
+        args.chat_template_path = None
+        if args.tito_model != TITOTokenizerType.DEFAULT.value:
+            auto_resolve_tito_model = TITOTokenizerType(args.tito_model)
+    elif args.chat_template_path is None and args.tito_model != TITOTokenizerType.DEFAULT.value:
+        auto_resolve_tito_model = TITOTokenizerType(args.tito_model)
 
-        resolved = try_get_fixed_chat_template(args.hf_checkpoint)
-        if resolved is None:
-            logger.warning(
-                "--chat-template-path=autofix but no fix rule found for %s, using HF default", args.hf_checkpoint
+    if auto_resolve_tito_model is not None:
+        # Intermediate ``system`` messages are not supported by any built-in
+        # fixed template, so fail fast instead of silently falling through to
+        # the HF default — that combination would render but is highly likely
+        # to break TITO append-only invariants.
+        if "system" in args.tito_allowed_append_roles:
+            raise ValueError(
+                f"--tito-model={auto_resolve_tito_model.value} cannot be used with "
+                f"--tito-allowed-append-roles {sorted(args.tito_allowed_append_roles)}: "
+                "no built-in fixed template supports appending intermediate 'system' "
+                "messages. Pass --chat-template-path /path/to/your-template.jinja and "
+                "verify it first via scripts/tools/verify_chat_template.py."
             )
-        args.chat_template_path = resolved
+        from miles.utils.chat_template_utils import resolve_fixed_chat_template
+
+        resolved_path = resolve_fixed_chat_template(
+            auto_resolve_tito_model,
+            allowed_append_roles=args.tito_allowed_append_roles,
+        )
+        if resolved_path is None:
+            logger.warning(
+                "No fixed template registered for tito_model=%s with allowed_append_roles=%s; "
+                "falling back to HF default chat template.",
+                auto_resolve_tito_model.value,
+                sorted(args.tito_allowed_append_roles),
+            )
+        else:
+            args.chat_template_path = resolved_path
 
     if args.chat_template_path is not None:
         if not os.path.isfile(args.chat_template_path):

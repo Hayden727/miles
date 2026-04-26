@@ -287,6 +287,23 @@ class Qwen3TITOTokenizer(TITOTokenizer):
         return prefix + incremental
 
 
+# Qwen3.5 and Qwen3-Next-Thinking share the ``<|im_end|>`` boundary handling
+# with Qwen3, so they reuse Qwen3TITOTokenizer's token-level logic via plain
+# inheritance.  The reason they are still split into named subclasses is that
+# ``TITOTokenizerType`` is the join key used by ``fixed_templates`` to pick the
+# right jinja file — they have *different* fixed templates even though they
+# share the same boundary behavior.
+
+
+class Qwen35TITOTokenizer(Qwen3TITOTokenizer):
+    """Qwen3.5 — same boundary behavior as Qwen3, distinct fixed template."""
+
+
+class QwenNextTITOTokenizer(Qwen3TITOTokenizer):
+    """Qwen3-Thinking-2507 / Qwen3-Next-Thinking — same boundary behavior as
+    Qwen3, distinct (shared) fixed template."""
+
+
 # ---------------------------------------------------------------------------
 # GLM 4.7 implementation
 # ---------------------------------------------------------------------------
@@ -347,12 +364,16 @@ class GLM47TITOTokenizer(TITOTokenizer):
 class TITOTokenizerType(str, Enum):
     DEFAULT = "default"
     QWEN3 = "qwen3"
+    QWEN35 = "qwen35"
+    QWENNEXT = "qwennext"
     GLM47 = "glm47"
 
 
 _TOKENIZER_REGISTRY: dict[TITOTokenizerType, type[TITOTokenizer]] = {
     TITOTokenizerType.DEFAULT: TITOTokenizer,
     TITOTokenizerType.QWEN3: Qwen3TITOTokenizer,
+    TITOTokenizerType.QWEN35: Qwen35TITOTokenizer,
+    TITOTokenizerType.QWENNEXT: QwenNextTITOTokenizer,
     TITOTokenizerType.GLM47: GLM47TITOTokenizer,
 }
 
