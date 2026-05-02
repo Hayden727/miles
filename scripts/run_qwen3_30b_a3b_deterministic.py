@@ -26,6 +26,7 @@ class ScriptArgs(BaseScriptArgs):
     true_on_policy_default_rollout_ep: bool = True
 
     def __post_init__(self):
+        rollout_engine_size_was_default = self.rollout_num_gpus_per_engine is None
         super().__post_init__()
         if (
             self.sglang_expert_parallel_size == 1
@@ -36,9 +37,11 @@ class ScriptArgs(BaseScriptArgs):
         if (
             self.true_on_policy
             and self.sglang_expert_parallel_size > 1
-            and self.rollout_num_gpus_per_engine < self.sglang_expert_parallel_size
+            and rollout_engine_size_was_default
         ):
-            self.rollout_num_gpus_per_engine = self.sglang_expert_parallel_size
+            self.rollout_num_gpus_per_engine = (
+                self.sglang_expert_parallel_size * self.expert_tensor_parallel_size
+            )
         apply_true_on_policy_script_defaults(self)
 
 

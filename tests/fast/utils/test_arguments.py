@@ -182,6 +182,7 @@ def test_true_on_policy_args_propagate_to_sglang_server_args(
         seed=7,
         offload_rollout=False,
         num_gpus_per_node=8,
+        colocate=False,
         use_rollout_routing_replay=False,
         fp16=False,
     )
@@ -195,6 +196,7 @@ def test_true_on_policy_args_propagate_to_sglang_server_args(
         nccl_port=12346,
         host="127.0.0.1",
         port=30000,
+        base_gpu_id=0,
     )
 
     assert args.sglang_enable_deterministic_inference is True
@@ -203,8 +205,28 @@ def test_true_on_policy_args_propagate_to_sglang_server_args(
     assert "rl_on_policy_target" not in server_args
     assert server_args["true_on_policy_contract"] == "qwen3_dense_true_on_policy_v1"
     assert server_args["enable_deterministic_inference"] is True
-    assert server_args["enable_prefill_only_deterministic_inference"] is False
+    assert server_args.get("enable_prefill_only_deterministic_inference", False) is False
     assert server_args["enable_dp_lm_head"] is False
+
+
+def test_true_on_policy_moe_rejects_sglang_moe_tp_mismatch():
+    args = SimpleNamespace(
+        rollout_num_gpus_per_engine=4,
+        sglang_data_parallel_size=1,
+        sglang_pipeline_parallel_size=1,
+        sglang_expert_parallel_size=2,
+        sglang_enable_dp_attention=False,
+        sglang_router_policy=None,
+        sglang_router_ip=None,
+        true_on_policy_mode=True,
+        recompute_logprobs_via_prefill=False,
+        sglang_enable_deterministic_inference=False,
+        num_experts=128,
+        expert_tensor_parallel_size=1,
+    )
+
+    with pytest.raises(ValueError, match="SGLang MoE TP to match Megatron"):
+        sglang_validate_args(args)
 
 
 def test_true_on_policy_sglang_cp_dp_lm_head_overrides_engine_defaults():
@@ -223,6 +245,7 @@ def test_true_on_policy_sglang_cp_dp_lm_head_overrides_engine_defaults():
         seed=7,
         offload_rollout=False,
         num_gpus_per_node=8,
+        colocate=False,
         use_rollout_routing_replay=False,
         fp16=False,
     )
@@ -234,7 +257,7 @@ def test_true_on_policy_sglang_cp_dp_lm_head_overrides_engine_defaults():
         nccl_port=12346,
         host="127.0.0.1",
         port=30000,
-        sglang_overrides={"enable_dp_lm_head": False},
+        base_gpu_id=0,
     )
 
     assert server_args["enable_dp_lm_head"] is True

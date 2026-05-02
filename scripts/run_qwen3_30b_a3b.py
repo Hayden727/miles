@@ -8,7 +8,7 @@ import miles.utils.external_utils.command_utils as U
 
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
-    mode: Literal["normal", "debug_minimal"] = "normal"
+    mode: Literal["normal", "debug_minimal", "debug_one_sample"] = "normal"
     run_id: str = U.create_run_id()
     model_name: str = "Qwen3-30B-A3B"
     megatron_model_type: str = "qwen3-30B-A3B"
@@ -103,25 +103,90 @@ def prepare(args: ScriptArgs):
         )
 
     if not args.enable_megatron_bridge:
+        checkpoint_path = _megatron_torch_dist_path(args)
+        conversion_args = _megatron_torch_dist_conversion_args(args)
         U.convert_checkpoint(
             model_name=args.model_name,
             megatron_model_type=args.megatron_model_type,
             num_gpus_per_node=args.num_gpus_per_node,
             # To support multi-node training, for simplicity, we put model into shared folder
             dir_dst=args.model_dir,
+            path_dst=checkpoint_path,
             hf_checkpoint=f"{args.model_dir}/{args.model_name}",
             megatron_path=args.megatron_path,
+            extra_args=conversion_args,
         )
+
+
+def _megatron_torch_dist_path(args: ScriptArgs) -> str:
+    if args.true_on_policy and args.expert_model_parallel_size > 1:
+        topology = (
+            f"tp{args.tensor_model_parallel_size}"
+            f"_pp{args.pipeline_model_parallel_size}"
+            f"_ep{args.expert_model_parallel_size}"
+            f"_etp{args.expert_tensor_parallel_size}"
+        )
+        return f"{args.model_dir}/{args.model_name}_torch_dist_{topology}"
+    return f"{args.model_dir}/{args.model_name}_torch_dist"
+
+
+def _megatron_torch_dist_conversion_args(args: ScriptArgs) -> str:
+    if not (args.true_on_policy and args.expert_model_parallel_size > 1):
+        return ""
+    return (
+        f"--tensor-model-parallel-size {args.tensor_model_parallel_size} "
+        f"--pipeline-model-parallel-size {args.pipeline_model_parallel_size} "
+        f"--expert-model-parallel-size {args.expert_model_parallel_size} "
+        f"--expert-tensor-parallel-size {args.expert_tensor_parallel_size} "
+        f"{_true_on_policy_vocab_padding_args(args)}"
+    )
+
+
+def _true_on_policy_vocab_padding_args(args: ScriptArgs) -> str:
+    if not (
+        args.true_on_policy
+        and args.expert_model_parallel_size > 1
+        and args.tensor_model_parallel_size > 1
+    ):
+        return ""
+    # Qwen3-30B-A3B's real vocab is already divisible by supported TP sizes.
+    # Avoid Megatron's default extra padding so HF -> torch-dist conversion and
+    # true-on-policy scoring use the same shard width.
+    return "--make-vocab-size-divisible-by 1 "
+
+
+def _true_on_policy_sequence_parallel_backward_args(args: ScriptArgs) -> str:
+    if not (
+        args.true_on_policy
+        and args.expert_model_parallel_size > 1
+        and args.tensor_model_parallel_size > 1
+        and args.use_sequence_parallel
+    ):
+        return ""
+    # TP+EP sequence-parallel true-on-policy currently produces nonfinite local
+    # wgrad buckets with Megatron's fused gradient accumulation path. Keep the
+    # unfused path for correctness until the fused kernel path is audited.
+    return "--no-gradient-accumulation-fusion "
 
 
 # TODO improve layering: split algorithm vs infra
 def execute(args: ScriptArgs):
-    is_debug_mode = args.mode == "debug_minimal"
-    ref_load_path = (
+    is_debug_mode = args.mode != "normal"
+    is_debug_one_sample = args.mode == "debug_one_sample"
+    train_data_parallel_size = (
+        args.num_nodes
+        * args.num_gpus_per_node
+        // (args.tensor_model_parallel_size * args.pipeline_model_parallel_size * args.context_parallel_size)
+    )
+    debug_global_batch_size = max(1, train_data_parallel_size)
+    debug_rollout_batch_size = debug_global_batch_size
+    debug_num_rollout = 1
+    megatron_load_path = (
         f"{args.model_dir}/{args.model_name}/"
         if args.enable_megatron_bridge
-        else f"{args.model_dir}/{args.model_name}_torch_dist"
+        else _megatron_torch_dist_path(args)
     )
+    ref_load_path = megatron_load_path
     load_save_path = f"{args.output_dir}/{args.run_id}/checkpoints"
 
     if args.rollout_fp8:
@@ -135,7 +200,7 @@ def execute(args: ScriptArgs):
     ckpt_args = (
         f"--hf-checkpoint {hf_checkpoint}/ "
         f"--ref-load {ref_load_path} "
-        f"--load {load_save_path} "
+        f"--load {megatron_load_path} "
         f"--save {load_save_path} "
         f"--save-interval {2 if is_debug_mode else 20} "
         f"--save-retain-interval {2 if is_debug_mode else 20} "
@@ -148,12 +213,12 @@ def execute(args: ScriptArgs):
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type deepscaler "
-        "--num-rollout 3000 "
-        "--rollout-batch-size 32 "
-        "--n-samples-per-prompt 8 "
-        f"--rollout-max-response-len {100 if args.mode == 'debug_minimal' else 8192} "
+        f"--num-rollout {debug_num_rollout if is_debug_one_sample else 3000} "
+        f"--rollout-batch-size {debug_rollout_batch_size if is_debug_one_sample else 32} "
+        f"--n-samples-per-prompt {1 if is_debug_one_sample else 8} "
+        f"--rollout-max-response-len {2 if is_debug_one_sample else (100 if args.mode == 'debug_minimal' else 8192)} "
         "--rollout-temperature 1 "
-        "--global-batch-size 256 "
+        f"--global-batch-size {debug_global_batch_size if is_debug_one_sample else 256} "
         "--balance-data "
     )
 
@@ -174,7 +239,10 @@ def execute(args: ScriptArgs):
         # "--micro-batch-size 1 "
         "--use-dynamic-batch-size "
         f"--max-tokens-per-gpu {args.max_tokens_per_gpu} "
+        f"{_true_on_policy_vocab_padding_args(args)}"
+        f"{_true_on_policy_sequence_parallel_backward_args(args)}"
     )
+    ci_args = "--ci-test --ci-disable-kl-checker " if is_debug_one_sample else ""
 
     grpo_args = (
         "--advantage-estimator grpo "
@@ -264,6 +332,7 @@ def execute(args: ScriptArgs):
                 f"{f'--sglang-ep-size {args.sglang_expert_parallel_size} ' if args.sglang_expert_parallel_size > 1 else ''}"
                 "--sglang-mem-fraction-static 0.7 "
                 "--sglang-cuda-graph-max-bs 512 "
+                f"{'--sglang-disable-cuda-graph ' if is_debug_one_sample else ''}"
             )
             optimizer_args += (
                 "--optimizer-cpu-offload " "--overlap-cpu-optimizer-d2h-h2d " "--use-precision-aware-optimizer "
@@ -283,6 +352,7 @@ def execute(args: ScriptArgs):
                 "--sglang-attention-backend trtllm_mha "
                 f"{f'--rollout-num-gpus {args.rollout_num_gpus} ' if args.rollout_num_gpus is not None else ''}"
                 f"{f'--sglang-ep-size {args.sglang_expert_parallel_size} ' if args.sglang_expert_parallel_size > 1 else ''}"
+                f"{'--sglang-disable-cuda-graph ' if is_debug_one_sample else ''}"
             )
             if args.rollout_fp8:
                 sglang_world_size = 2
@@ -353,6 +423,7 @@ tis_batch_normalize: true
         f"{eval_args} "
         f"{sglang_args} "
         f"{misc_args} "
+        f"{ci_args} "
         f"{args.extra_args} "
     )
 
