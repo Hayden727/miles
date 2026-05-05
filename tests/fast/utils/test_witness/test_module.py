@@ -147,7 +147,9 @@ class _FakeGPTModel(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, witness_ids: torch.Tensor | None = None) -> torch.Tensor:
         if self.pre_process:
-            decoder_input = self.embedding(input_ids)
+            # Megatron decoders use sequence-first [s, b, h] layout, which is what
+            # _DataWitness expects (it transposes its own output to [s, b, 1]).
+            decoder_input = self.embedding(input_ids).transpose(0, 1).contiguous()
         else:
             decoder_input = None
 
@@ -226,7 +228,8 @@ class TestInstallWitness:
     def test_middle_pp_stage_modifies_input_tensor(self) -> None:
         model = _FakeGPTModel(pre_process=False)
         install_witness(model, buffer_size=10)
-        hidden = torch.randn(1, 4, 16)
+        # Sequence-first: [s=4, b=1, h=16].
+        hidden = torch.randn(4, 1, 16)
         model.decoder.input_tensor = hidden.clone()
         out = model(torch.tensor([[1, 2, 3, 4]]), witness_ids=torch.tensor([[0, 1, 2, 3]]))
         assert torch.equal(out, hidden)
@@ -234,7 +237,8 @@ class TestInstallWitness:
     def test_middle_pp_stage_produces_gradient(self) -> None:
         model = _FakeGPTModel(pre_process=False)
         install_witness(model, buffer_size=10)
-        model.decoder.input_tensor = torch.randn(1, 4, 16, requires_grad=True)
+        # Sequence-first: [s=4, b=1, h=16].
+        model.decoder.input_tensor = torch.randn(4, 1, 16, requires_grad=True)
         out = model(torch.tensor([[1, 2, 3, 4]]), witness_ids=torch.tensor([[5, 5, 5, 5]]))
         out.sum().backward()
         assert 5 in model.local_head_witness.witness.weight.grad.squeeze(-1).nonzero(as_tuple=True)[0].tolist()
@@ -267,8 +271,10 @@ class TestZeroWitnessRows:
         witness = _DataWitness(buffer_size=10)
 
         optimizer = torch.optim.Adam(witness.parameters(), lr=0.01)
-        ids = torch.arange(10)
-        out = witness(ids, ids)
+        # _DataWitness expects witness_ids [b, s] and hidden_states [s, b, h] (sequence-first).
+        witness_ids = torch.arange(10).unsqueeze(0)  # [1, 10]
+        hidden_states = torch.zeros(10, 1, 4, requires_grad=True)  # [s=10, b=1, h=4]
+        out = witness(witness_ids, hidden_states)
         out.sum().backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -351,7 +357,9 @@ class TestWitnessDumpAndClearStale:
         optimizer = torch.optim.Adam(all_params, lr=0.01)
         witness_info = WitnessInfo(witness_ids=[1, 2, 3, 4], stale_ids=[5, 6])
 
-        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger:
+        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger, patch(
+            "miles.utils.witness.module.mpu.get_pipeline_model_parallel_rank", return_value=0
+        ):
             mock_logger = MagicMock()
             mock_get_logger.return_value = mock_logger
 
@@ -375,7 +383,9 @@ class TestWitnessDumpAndClearStale:
         optimizer = torch.optim.Adam(chunk.parameters(), lr=0.01)
         witness_info = WitnessInfo(witness_ids=[0], stale_ids=[3, 7])
 
-        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger:
+        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger, patch(
+            "miles.utils.witness.module.mpu.get_pipeline_model_parallel_rank", return_value=0
+        ):
             mock_get_logger.return_value = MagicMock()
             witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)
 
@@ -395,7 +405,9 @@ class TestWitnessDumpAndClearStale:
         optimizer = torch.optim.Adam(chunk.parameters(), lr=0.01)
         witness_info = WitnessInfo(witness_ids=[0], stale_ids=[])
 
-        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger:
+        with patch("miles.utils.witness.module.get_event_logger") as mock_get_logger, patch(
+            "miles.utils.witness.module.mpu.get_pipeline_model_parallel_rank", return_value=0
+        ):
             mock_get_logger.return_value = MagicMock()
             witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)
 
@@ -557,12 +569,15 @@ class TestAbsBroadcastAddGradientFlow:
         embedding = torch.nn.Embedding(8, 1)
         torch.nn.init.zeros_(embedding.weight)
 
-        # Construct output_layer weight where column sums are constant
-        # → plain broadcast gradient is exactly zero (softmax sum-to-zero property)
-        W = torch.tensor([[1.0, 1.0, 1.0, 1.0],
-                          [1.0, 1.0, 1.0, 1.0],
-                          [1.0, 1.0, 1.0, 1.0],
-                          [1.0, 1.0, 1.0, 1.0]])
+        # Construct output_layer weight where ROW sums are constant (each row sums to 4),
+        # so that dL/d_combined.sum_over_last_dim = sum_i dL/dlogit_i * row_sum_i = 0
+        # (using softmax-loss sum-to-zero property). Row values differ so per-element
+        # grads are nonzero — only their sum cancels. This is exactly the scenario
+        # where plain broadcast (sum) cancels but abs broadcast (abs.sum) preserves.
+        W = torch.tensor([[2.0, 0.0, 1.0, 1.0],
+                          [0.0, 2.0, 1.0, 1.0],
+                          [1.0, 1.0, 2.0, 0.0],
+                          [1.0, 1.0, 0.0, 2.0]])
         output_layer = torch.nn.Linear(hidden_dim, vocab_size, bias=False)
         output_layer.weight.data = W
 
