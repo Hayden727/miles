@@ -67,6 +67,9 @@ def convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample
     if any(sample.multimodal_train_inputs is not None for sample in samples):
         train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
+    if any(sample.weight_versions for sample in samples):
+        train_data["weight_versions"] = [sample.weight_versions for sample in samples]
+
     if "teacher_log_probs" in samples[0].__dict__:
         train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
@@ -142,6 +145,7 @@ def split_train_data_by_dp(self, data, dp_size):
             "rollout_routed_experts",
             "prompt",
             "teacher_log_probs",
+            "weight_versions",
         ]:
             if key not in data:
                 continue
