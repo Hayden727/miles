@@ -120,17 +120,18 @@ class TITOTokenizer:
             trim_trailing_ids=self.trailing_token_ids or None,
         )
 
-    def _render_messages(
+    def render_messages(
         self,
         messages: list[dict[str, Any]],
         *,
         add_generation_prompt: bool,
         tools: list[dict[str, Any]] | None = None,
-    ) -> str:
+        tokenize: bool = False,
+    ) -> str | list[int]:
         return apply_chat_template(
             messages,
             tokenizer=self.tokenizer,
-            tokenize=False,
+            tokenize=tokenize,
             add_generation_prompt=add_generation_prompt,
             tools=tools,
             **self.chat_template_kwargs,
@@ -175,8 +176,8 @@ class TITOTokenizer:
         When *add_generation_prompt* is True and *appended_messages* is empty,
         this computes the generation-prompt suffix (the assistant opener tokens).
         """
-        text_without = self._render_messages(base_messages, add_generation_prompt=False, tools=tools)
-        text_with = self._render_messages(
+        text_without = self.render_messages(base_messages, add_generation_prompt=False, tools=tools)
+        text_with = self.render_messages(
             base_messages + appended_messages,
             add_generation_prompt=add_generation_prompt,
             tools=tools,
