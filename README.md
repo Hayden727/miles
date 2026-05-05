@@ -89,7 +89,7 @@ We recommend using our official Docker image for the best performance and compat
 # Pull the latest image
 docker pull radixark/miles:latest
 
-# Or install from source on Linux x86_64 with Python 3.10-3.12
+# Or install from source on Linux with Python 3.10-3.12
 pip install -r requirements.txt
 pip install -e .
 ```
