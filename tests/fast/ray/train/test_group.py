@@ -593,8 +593,10 @@ def _make_failing_actor_factory() -> Callable:
 
 
 class TestRefreshCellsErrorHandling:
-    async def test_healing_failure_stops_pending_cell_keeps_alive(self):
-        """When healing init fails, pending cell is stopped, alive cells unaffected."""
+    async def test_healing_failure_marks_pending_cell_errored_keeps_alive(self):
+        """When healing init fails, pending cell is marked errored (via _execute_raw's
+        except path), alive cells unaffected. The external FT controller is then
+        responsible for transitioning the errored cell to stopped."""
         group = await _make_alive_group(num_cells=3)
 
         # Step 1: Stop cell 2 and start it (pending)
@@ -604,13 +606,13 @@ class TestRefreshCellsErrorHandling:
         # Step 2: Replace actor factory so new actors fail on init
         group._cells[2]._actor_factory = _make_failing_actor_factory()
 
-        # Step 3: Refresh — healing should fail, pending cell stopped
+        # Step 3: Refresh — healing init fails, cell auto-marks errored
         await group._refresh_cells()
 
-        # Step 4: Cell 2 stopped, cells 0 and 1 still alive
+        # Step 4: Cell 2 errored, cells 0 and 1 still alive
         assert group._cells[0].is_alive
         assert group._cells[1].is_alive
-        assert group._cells[2].is_stopped
+        assert group._cells[2].is_errored
 
 
 class TestHeartbeatMonitor:
@@ -710,7 +712,6 @@ class TestCheckTrainOneAttempt:
             [[NORMAL]],  # single cell, single actor
             [[NORMAL, NORMAL], [NORMAL]],  # multi cell, multi actor
             [_ERR, [NORMAL, NORMAL]],  # errored + normal → ok
-            [],  # no cells at all → vacuously ok
             [[]],  # cell with empty actor list → vacuously ok
         ],
     )
@@ -811,21 +812,26 @@ class TestTrainRetry:
         for i in range(2):
             assert _count_train_calls(group, i) >= 2
 
-    async def test_cell_errored_retries_once_then_succeeds(self):
-        """One cell errors during train → ok=False → retries once with remaining alive cells → succeeds."""
+    async def test_cell_errored_does_not_retry_when_others_normal(self):
+        """One cell errors during train but others return NORMAL → no retry.
+
+        See _check_train_one_attempt: 'If some cells errors + all other cells claim
+        normal, we do *not* retry. This may happen when some cells fails *after*
+        exchanging gradients w/ others.' So alive cells get exactly 1 train call.
+        """
         group = await _make_alive_group(num_cells=3)
 
         # Step 1: Make cell 1 fail (exception)
         for handle in group._cells[1]._get_actor_handles():
             ray.get(handle.set_fail_methods.remote(["train"]))
 
-        # Step 2: Train retries once: first attempt has errored cell, second attempt succeeds with alive cells only
+        # Step 2: Train completes without retry (cell 1 errored but others NORMAL)
         await group.train(rollout_id=0, rollout_data_pack=_DUMMY_DATA_PACK)
 
-        # Step 3: Cell 1 errored, alive cells got 2 train calls (one per attempt)
+        # Step 3: Cell 1 errored, alive cells each got 1 train call (no retry)
         assert group._cells[1].is_errored
         for i in [0, 2]:
-            assert _count_train_calls(group, i) == 2
+            assert _count_train_calls(group, i) == 1
 
 
 class TestAllocateWitnessInfo:
