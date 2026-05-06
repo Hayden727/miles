@@ -70,6 +70,11 @@ class TrainAdvantageComputationEvent(_ActorTrainEventBase):
     witness_ids: list[list[int]]
 
 
+class WitnessSampleTrimmedEvent(_ActorTrainEventBase):
+    type: Literal["witness_sample_trimmed"] = "witness_sample_trimmed"
+    trimmed_witness_ids: list[int]
+
+
 class MetricEvent(EventBase):
     type: Literal["metric"] = "metric"
     rollout_id: int | None = None
@@ -84,6 +89,7 @@ Event = Annotated[
     | WitnessAllocateIdEvent
     | TrainGroupStepEndEvent
     | TrainAdvantageComputationEvent
+    | WitnessSampleTrimmedEvent
     | MetricEvent,
     Discriminator("type"),
 ]
