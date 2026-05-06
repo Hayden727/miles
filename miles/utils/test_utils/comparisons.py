@@ -238,7 +238,13 @@ def _run_comparator(
         str(target_path),
         "--output-format",
         "json",
+        # Skip 'rank' when grouping bundles: under FT (target) and non-FT (baseline)
+        # the same logical (pp_rank, cp_rank, ep_rank, tp_rank) coordinate maps to a
+        # different absolute rank ID (e.g. baseline rank=4 vs target cell0 rank=2 for
+        # PP=1, CP=0). Without skipping 'rank' the comparator gets `baseline_load_failed`
+        # for every tensor and fails with rc=1.
         "--grouping-skip-keys",
+        "rank",
         "--diff-threshold",
         str(diff_threshold),
         "--allow-skipped-pattern",
