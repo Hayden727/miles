@@ -2,6 +2,24 @@ from typing import Any
 
 from miles.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
+# Keys whose value is a list with one entry per sample. Authoritative source for
+# both partitioning (split_train_data_by_dp) and trim (_apply_dynamic_global_batch_size).
+PER_SAMPLE_LIST_KEYS: list[str] = [
+    "tokens",
+    "multimodal_train_inputs",
+    "response_lengths",
+    "rewards",
+    "truncated",
+    "loss_masks",
+    "round_number",
+    "sample_indices",
+    "rollout_log_probs",
+    "rollout_routed_experts",
+    "prompt",
+    "teacher_log_probs",
+    "seq_witness_ids",
+]
+
 
 def split_train_data_by_dp(args, data: dict[str, Any], *, dp_size: int) -> list[dict[str, Any]]:
     """Split the train data by data parallel size."""
@@ -24,21 +42,7 @@ def split_train_data_by_dp(args, data: dict[str, Any], *, dp_size: int) -> list[
         rollout_data = {}
         partition = partitions[i]
         rollout_data["partition"] = partition
-        for key in [
-            "tokens",
-            "multimodal_train_inputs",
-            "response_lengths",
-            "rewards",
-            "truncated",
-            "loss_masks",
-            "round_number",
-            "sample_indices",
-            "rollout_log_probs",
-            "rollout_routed_experts",
-            "prompt",
-            "teacher_log_probs",
-            "seq_witness_ids",
-        ]:
+        for key in PER_SAMPLE_LIST_KEYS:
             if key not in data:
                 continue
             val = [data[key][j] for j in partition]

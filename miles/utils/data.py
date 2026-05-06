@@ -8,7 +8,7 @@ import re
 import numpy as np
 import ray
 
-from .data_utils import split_train_data_by_dp
+from .data_utils import PER_SAMPLE_LIST_KEYS, split_train_data_by_dp
 from .witness.allocator import WitnessInfo
 
 try:
@@ -301,8 +301,11 @@ def _apply_dynamic_global_batch_size(args, data: dict, *, dp_size: int) -> None:
     data["dynamic_global_batch_size"] = n_kept
     assert n_kept <= n_total, f"dynamic_global_batch_size={n_kept} exceeds num_samples={n_total}"
     if n_kept < n_total:
-        for key in list(data.keys()):
-            if isinstance(data[key], list) and len(data[key]) == n_total:
+        for key in PER_SAMPLE_LIST_KEYS:
+            if key in data:
+                assert len(data[key]) == n_total, (
+                    f"per-sample key {key!r} has len={len(data[key])}, expected {n_total}"
+                )
                 data[key] = data[key][:n_kept]
 
 
