@@ -132,32 +132,56 @@ def _serialize_for_transport(
     state_dict: MCoreTensorAwareStateDict,
     iteration: int,
 ) -> dict[str, object]:
+    """Serialize for transport, deduping by underlying storage.
+
+    `pop_tensors()` returns ShardedTensor `.data` views. Many of those views share
+    one big underlying storage (e.g. Megatron distributed-optimizer grad buckets).
+    `torchft.PGTransport._cast_tensor` casts each tensor to a uint8 view of its
+    FULL storage and sends that — so naively sending N views of one bucket sends
+    bucket_size * N bytes (we measured ~110x amplification: 12.5 GB real data
+    sent as 1387 GB).
+
+    Fix: send each unique storage exactly once as `unique_storages`, plus per-view
+    `view_metas` (storage_id, dtype, shape, stride, storage_offset) so the
+    receiver can reconstruct the original views by `as_strided`.
+    """
     tensors: list[torch.Tensor] = state_dict.pop_tensors()
-    # torchft PGTransport._cast_tensor uses `type(t) is torch.Tensor` (strict),
+    # PGTransport._cast_tensor uses `type(t) is torch.Tensor` (strict),
     # which rejects torch.nn.Parameter. Detach into plain Tensors that share
     # storage but pass the type check.
     tensors = [t.detach() if type(t) is not torch.Tensor else t for t in tensors]
-    total_view_bytes = sum(t.nbytes for t in tensors)
-    storage_bytes_sum = sum(t.untyped_storage().nbytes() for t in tensors)
-    unique_storages = {t.untyped_storage().data_ptr(): t.untyped_storage().nbytes() for t in tensors}
-    total_unique_storage_bytes = sum(unique_storages.values())
-    sizes_view_gb = sorted([t.nbytes / 1024**3 for t in tensors], reverse=True)[:5]
-    sizes_storage_gb = sorted([t.untyped_storage().nbytes() / 1024**3 for t in tensors], reverse=True)[:5]
+
+    storage_id_by_ptr: dict[int, int] = {}
+    unique_storages: list[torch.Tensor] = []
+    view_metas: list[dict] = []
+    for t in tensors:
+        storage = t.untyped_storage()
+        ptr = storage.data_ptr()
+        if ptr not in storage_id_by_ptr:
+            storage_id_by_ptr[ptr] = len(unique_storages)
+            # Wrap full storage as uint8 tensor (no copy, shares memory).
+            unique_storages.append(torch.tensor(storage, dtype=torch.uint8, device=t.device))
+        view_metas.append({
+            "storage_id": storage_id_by_ptr[ptr],
+            "dtype": t.dtype,
+            "shape": tuple(t.shape),
+            "stride": tuple(t.stride()),
+            "storage_offset": t.storage_offset(),
+        })
+
+    view_bytes_sum = sum(t.nbytes for t in tensors)
+    unique_storage_bytes = sum(s.nbytes for s in unique_storages)
     logger.info(
-        "[OOM_DEBUG] _serialize_for_transport: %d tensors; "
-        "view_bytes_sum=%.2f GB; storage_bytes_sum=%.2f GB (each tensor sends its full storage as uint8); "
-        "unique_storages=%d, unique_storage_bytes=%.2f GB; "
-        "top5_view=%s GB; top5_storage=%s GB",
+        "[OOM_DEBUG] _serialize_for_transport (dedup): %d tensors -> %d unique storages; "
+        "view_bytes_sum=%.2f GB; unique_storage_bytes=%.2f GB (this is what we transmit)",
         len(tensors),
-        total_view_bytes / 1024**3,
-        storage_bytes_sum / 1024**3,
         len(unique_storages),
-        total_unique_storage_bytes / 1024**3,
-        sizes_view_gb,
-        sizes_storage_gb,
+        view_bytes_sum / 1024**3,
+        unique_storage_bytes / 1024**3,
     )
     return {
-        "tensors": tensors,
+        "unique_storages": unique_storages,
+        "view_metas": view_metas,
         "hollow_state_dict": state_dict,
         "iteration": iteration,
     }
@@ -166,17 +190,36 @@ def _serialize_for_transport(
 def _deserialize_from_transport(
     payload: dict[str, object],
 ) -> tuple[int, MCoreTensorAwareStateDict]:
+    """Reverse of `_serialize_for_transport`: reconstruct per-tensor views from
+    received unique_storages using view_metas.
+    """
     iteration: int = payload["iteration"]
     hollow_state_dict: MCoreTensorAwareStateDict = payload["hollow_state_dict"]
-    tensors: list[torch.Tensor] = payload["tensors"]
+    unique_storages: list[torch.Tensor] = payload["unique_storages"]
+    view_metas: list[dict] = payload["view_metas"]
 
-    total_bytes = sum(t.nbytes for t in tensors)
+    total_storage_bytes = sum(s.nbytes for s in unique_storages)
     logger.info(
-        "[OOM_DEBUG] _deserialize_from_transport: %d tensors, total %.2f GB (devices=%s)",
-        len(tensors),
-        total_bytes / 1024**3,
-        list({str(t.device) for t in tensors})[:5],
+        "[OOM_DEBUG] _deserialize_from_transport (dedup): %d unique storages, %d view_metas; "
+        "total_storage_bytes=%.2f GB; storage_devices=%s",
+        len(unique_storages),
+        len(view_metas),
+        total_storage_bytes / 1024**3,
+        list({str(s.device) for s in unique_storages})[:5],
     )
+
+    tensors: list[torch.Tensor] = []
+    for vm in view_metas:
+        storage_t = unique_storages[vm["storage_id"]]  # uint8 view of received storage
+        # Reinterpret bytes as the original dtype, then apply stride/offset.
+        dtype_view = storage_t.view(vm["dtype"])
+        view = torch.as_strided(
+            dtype_view,
+            size=vm["shape"],
+            stride=vm["stride"],
+            storage_offset=vm["storage_offset"],
+        )
+        tensors.append(view)
 
     hollow_state_dict.insert_tensors(tensors)
     return iteration, hollow_state_dict
