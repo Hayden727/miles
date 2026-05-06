@@ -232,13 +232,10 @@ def _recv_checkpoint_with_logging(
         if inplace is None:
             work.wait(timeout)
             t = t.cpu()
+            # Aggressive: empty cache + gc EVERY tensor so pinned-host cache cannot accumulate.
+            torch._C._host_emptyCache()
             if cur_i % log_interval == 0 or cur_i == n_tensors - 1:
                 _log_mem(f"recv_loop.tensor_{cur_i}_done_nbytes_{v.nbytes}")
-                # Hypothesis: PyTorch pinned-host cache + glibc fragmentation accumulate
-                # during the t.cpu() loop. Drain caches and gc to expose true RSS.
-                torch._C._host_emptyCache()
-                gc.collect()
-                _log_mem(f"recv_loop.tensor_{cur_i}_after_emptyCache")
         else:
             works.append(work)
         return torch.as_strided(
