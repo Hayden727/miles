@@ -92,11 +92,10 @@ def _keep_only_final_attempt(events: list[MetricEvent]) -> list[MetricEvent]:
     def _attempt(e: MetricEvent) -> int:
         return e.attempt if e.attempt is not None else 0
 
-    max_attempt_by_rollout: dict[int, int] = {}
-    for e in events:
-        a = _attempt(e)
-        if e.rollout_id not in max_attempt_by_rollout or a > max_attempt_by_rollout[e.rollout_id]:
-            max_attempt_by_rollout[e.rollout_id] = a
+    max_attempt_by_rollout: dict[int, int] = {
+        rollout_id: max(_attempt(e) for e in events if e.rollout_id == rollout_id)
+        for rollout_id in {e.rollout_id for e in events}
+    }
     return [e for e in events if _attempt(e) == max_attempt_by_rollout[e.rollout_id]]
 
 
