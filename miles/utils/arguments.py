@@ -2197,8 +2197,10 @@ def miles_validate_args(args):
         f"delay_split_train_data_by_dp={getattr(args, 'delay_split_train_data_by_dp', False)}, "
         f"use_dynamic_batch_size={getattr(args, 'use_dynamic_batch_size', False)}, "
         f"max_tokens_per_gpu={getattr(args, 'max_tokens_per_gpu', None)}, "
-        f"tp={args.tensor_model_parallel_size}, pp={args.pipeline_model_parallel_size}, "
-        f"cp={args.context_parallel_size}, ep={getattr(args, 'expert_model_parallel_size', 1)}, "
+        f"tp={getattr(args, 'tensor_model_parallel_size', None)}, "
+        f"pp={getattr(args, 'pipeline_model_parallel_size', None)}, "
+        f"cp={getattr(args, 'context_parallel_size', None)}, "
+        f"ep={getattr(args, 'expert_model_parallel_size', 1)}, "
         f"rollout_batch_size={getattr(args, 'rollout_batch_size', None)}, "
         f"n_samples_per_prompt={getattr(args, 'n_samples_per_prompt', None)}"
     )
