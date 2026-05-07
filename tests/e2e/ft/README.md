@@ -146,8 +146,7 @@ Multi-phase comparison test. Verifies healing state transfer is bitwise correct.
 
 ```
 Type: comparison, multi-phase (phase_a + phase_b)
-Phase A steps: 1, Phase B steps: 3, rtol: 1e-2 (3e-2 / atol 2e-8 for real-rollout modes,
-which restart SGLang on stop+start_cell and cannot be bitwise reproducible)
+Phase A steps: 1, Phase B steps: 3, rtol: 1e-2 (3e-2 / atol 2e-8 for real-rollout modes)
 
 Phase A: same as with_failure (1 step + save ckpt).
 
