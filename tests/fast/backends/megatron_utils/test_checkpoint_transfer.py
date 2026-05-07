@@ -33,7 +33,7 @@ def state_dict() -> MCoreTensorAwareStateDict:
 
 
 class TestSerializeForTransport:
-    def test_returns_separated_tensors_iteration_and_hollow_shell(
+    def test_returns_separated_storages_iteration_and_hollow_shell(
         self, state_dict: MCoreTensorAwareStateDict
     ):
         original_tensors = [t.clone() for t in state_dict.tensors]
@@ -41,10 +41,15 @@ class TestSerializeForTransport:
         payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
 
         assert payload["iteration"] == 42
-        assert isinstance(payload["tensors"], list)
-        assert len(payload["tensors"]) == 3
-        for t, original in zip(payload["tensors"], original_tensors, strict=True):
+        assert isinstance(payload["unique_storages"], list)
+        assert isinstance(payload["view_metas"], list)
+        assert len(payload["view_metas"]) == 3
+
+        # Round-trip the storages+metas back into views and compare.
+        decoded = _TensorViewCodec.decode(payload["unique_storages"], payload["view_metas"])
+        for t, original in zip(decoded, original_tensors, strict=True):
             assert torch.equal(t, original)
+
         assert payload["hollow_state_dict"] is state_dict
         assert payload["hollow_state_dict"].is_hollow
 
