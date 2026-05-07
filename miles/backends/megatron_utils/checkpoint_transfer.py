@@ -48,7 +48,7 @@ def send_ckpt(
         opt_param_scheduler=opt_param_scheduler,
     )
 
-    payload = _serialize_for_transport(state_dict=state_dict, iteration=iteration)
+    payload = _TransportCodec.encode(state_dict=state_dict, iteration=iteration)
 
     transport = _create_transport(indep_dp, timeout)
     transport.send_checkpoint(
@@ -89,7 +89,7 @@ def recv_ckpt(
         timeout=timeout,
     )
 
-    iteration, state_dict = _deserialize_from_transport(payload)
+    iteration, state_dict = _TransportCodec.decode(payload)
     logger.info(f"Received checkpoint (iteration={iteration}) from alive_rank={src_rank}")
 
     manager = InMemoryCheckpointManager()
@@ -97,55 +97,57 @@ def recv_ckpt(
     return manager
 
 
-def _serialize_for_transport(
-    *,
-    state_dict: MCoreTensorAwareStateDict,
-    iteration: int,
-) -> dict[str, object]:
-    """Serialize for transport, deduping by underlying storage.
+class _TransportCodec:
+    @staticmethod
+    def encode(
+        *,
+        state_dict: MCoreTensorAwareStateDict,
+        iteration: int,
+    ) -> dict[str, object]:
+        """Serialize for transport, deduping by underlying storage.
 
-    `pop_tensors()` returns ShardedTensor `.data` views. Many of those views share
-    one big underlying storage (e.g. Megatron distributed-optimizer grad buckets).
-    `torchft.PGTransport._cast_tensor` casts each tensor to a uint8 view of its
-    FULL storage and sends that — so naively sending N views of one bucket sends
-    bucket_size * N bytes (we measured ~110x amplification: 12.5 GB real data
-    sent as 1387 GB).
+        `pop_tensors()` returns ShardedTensor `.data` views. Many of those views share
+        one big underlying storage (e.g. Megatron distributed-optimizer grad buckets).
+        `torchft.PGTransport._cast_tensor` casts each tensor to a uint8 view of its
+        FULL storage and sends that — so naively sending N views of one bucket sends
+        bucket_size * N bytes (we measured ~110x amplification: 12.5 GB real data
+        sent as 1387 GB).
 
-    Fix: send each unique storage exactly once as `unique_storages`, plus per-view
-    `view_metas` (storage_id, dtype, shape, stride, storage_offset) so the
-    receiver can reconstruct the original views by `as_strided`.
-    """
-    tensors: list[torch.Tensor] = state_dict.pop_tensors()
-    # PGTransport._cast_tensor uses `type(t) is torch.Tensor` (strict),
-    # which rejects torch.nn.Parameter. Detach into plain Tensors that share
-    # storage but pass the type check.
-    tensors = [t.detach() if type(t) is not torch.Tensor else t for t in tensors]
+        Fix: send each unique storage exactly once as `unique_storages`, plus per-view
+        `view_metas` (storage_id, dtype, shape, stride, storage_offset) so the
+        receiver can reconstruct the original views by `as_strided`.
+        """
+        tensors: list[torch.Tensor] = state_dict.pop_tensors()
+        # PGTransport._cast_tensor uses `type(t) is torch.Tensor` (strict),
+        # which rejects torch.nn.Parameter. Detach into plain Tensors that share
+        # storage but pass the type check.
+        tensors = [t.detach() if type(t) is not torch.Tensor else t for t in tensors]
 
-    unique_storages, view_metas = _TensorViewCodec.encode(tensors)
+        unique_storages, view_metas = _TensorViewCodec.encode(tensors)
 
-    return {
-        "unique_storages": unique_storages,
-        "view_metas": view_metas,
-        "hollow_state_dict": state_dict,
-        "iteration": iteration,
-    }
+        return {
+            "unique_storages": unique_storages,
+            "view_metas": view_metas,
+            "hollow_state_dict": state_dict,
+            "iteration": iteration,
+        }
 
+    @staticmethod
+    def decode(
+        payload: dict[str, object],
+    ) -> tuple[int, MCoreTensorAwareStateDict]:
+        """Reverse of `encode`: reconstruct per-tensor views from received
+        unique_storages using view_metas.
+        """
+        iteration: int = payload["iteration"]
+        hollow_state_dict: MCoreTensorAwareStateDict = payload["hollow_state_dict"]
+        unique_storages: list[torch.Tensor] = payload["unique_storages"]
+        view_metas: list[dict] = payload["view_metas"]
 
-def _deserialize_from_transport(
-    payload: dict[str, object],
-) -> tuple[int, MCoreTensorAwareStateDict]:
-    """Reverse of `_serialize_for_transport`: reconstruct per-tensor views from
-    received unique_storages using view_metas.
-    """
-    iteration: int = payload["iteration"]
-    hollow_state_dict: MCoreTensorAwareStateDict = payload["hollow_state_dict"]
-    unique_storages: list[torch.Tensor] = payload["unique_storages"]
-    view_metas: list[dict] = payload["view_metas"]
+        tensors = _TensorViewCodec.decode(unique_storages, view_metas)
 
-    tensors = _TensorViewCodec.decode(unique_storages, view_metas)
-
-    hollow_state_dict.insert_tensors(tensors)
-    return iteration, hollow_state_dict
+        hollow_state_dict.insert_tensors(tensors)
+        return iteration, hollow_state_dict
 
 
 class _TensorViewCodec:

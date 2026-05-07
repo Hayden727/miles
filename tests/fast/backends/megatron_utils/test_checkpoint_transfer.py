@@ -9,8 +9,7 @@ from megatron.core.dist_checkpointing.tensor_aware_state_dict import MCoreTensor
 
 from miles.backends.megatron_utils.checkpoint_transfer import (
     _TensorViewCodec,
-    _deserialize_from_transport,
-    _serialize_for_transport,
+    _TransportCodec,
 )
 
 
@@ -39,7 +38,7 @@ class TestSerializeForTransport:
     ):
         original_tensors = [t.clone() for t in state_dict.tensors]
 
-        payload = _serialize_for_transport(state_dict=state_dict, iteration=42)
+        payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
 
         assert payload["iteration"] == 42
         assert isinstance(payload["tensors"], list)
@@ -54,7 +53,7 @@ class TestSerializeForTransport:
     ):
         """The whole point of the fix: PGTransport's tree_flatten_with_path must see
         each ShardedTensor.data as its own leaf, not buried inside a pickled blob."""
-        payload = _serialize_for_transport(state_dict=state_dict, iteration=42)
+        payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
 
         leaves, _ = tree_flatten_with_path(payload)
         tensor_leaves = [v for _, v in leaves if isinstance(v, torch.Tensor)]
@@ -69,7 +68,7 @@ class TestSerializeForTransport:
     ):
         """PGTransport pickles non-tensor leaves; the hollow shell must survive
         a pickle round-trip and not contain any of the original tensor storage."""
-        payload = _serialize_for_transport(state_dict=state_dict, iteration=42)
+        payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
 
         restored = pickle.loads(pickle.dumps(payload["hollow_state_dict"]))
 
@@ -87,8 +86,8 @@ class TestDeserializeFromTransport:
         original_tensors = [t.clone() for t in state_dict.tensors]
         original_common = dict(state_dict.common)
 
-        payload = _serialize_for_transport(state_dict=state_dict, iteration=42)
-        iteration_back, state_dict_back = _deserialize_from_transport(payload)
+        payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
+        iteration_back, state_dict_back = _TransportCodec.decode(payload)
 
         assert iteration_back == 42
         assert not state_dict_back.is_hollow
@@ -107,7 +106,7 @@ class TestDeserializeFromTransport:
         original_common = dict(state_dict.common)
 
         # Step 1: sender — wrap state_dict for transport
-        payload = _serialize_for_transport(state_dict=state_dict, iteration=42)
+        payload = _TransportCodec.encode(state_dict=state_dict, iteration=42)
 
         # Step 2: sender — flatten via pytree (what PGTransport does internally)
         leaves, treespec = tree_flatten_with_path(payload)
@@ -134,7 +133,7 @@ class TestDeserializeFromTransport:
         payload_recv = tree_unflatten(recv_values, treespec_recv)
 
         # Step 5: receiver — unwrap into iteration + state_dict
-        iteration_back, state_dict_back = _deserialize_from_transport(payload_recv)
+        iteration_back, state_dict_back = _TransportCodec.decode(payload_recv)
 
         assert iteration_back == 42
         assert not state_dict_back.is_hollow
