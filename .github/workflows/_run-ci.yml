@@ -85,8 +85,8 @@ jobs:
           MEGATRON_PR="${INPUT_MEGATRON_PR}"
           SGLANG_PR="${INPUT_SGLANG_PR}"
           if [ -n "$PR_BODY" ]; then
-            PR_MEGATRON_PR=$(echo "$PR_BODY" | grep -oP '(?<=ci-megatron-pr:\s)\S+' || true)
-            PR_SGLANG_PR=$(echo "$PR_BODY" | grep -oP '(?<=ci-sglang-pr:\s)\S+' || true)
+            PR_MEGATRON_PR=$(echo "$PR_BODY" | grep -m1 -oP '^ci-megatron-pr:\s+\K\S+' || true)
+            PR_SGLANG_PR=$(echo "$PR_BODY" | grep -m1 -oP '^ci-sglang-pr:\s+\K\S+' || true)
             [ -z "$MEGATRON_PR" ] && [ -n "$PR_MEGATRON_PR" ] && MEGATRON_PR="$PR_MEGATRON_PR"
             [ -z "$SGLANG_PR" ] && [ -n "$PR_SGLANG_PR" ] && SGLANG_PR="$PR_SGLANG_PR"
           fi
@@ -95,7 +95,7 @@ jobs:
           resolve_fetch_ref() {
             local ref="$1"
             if [[ "$ref" =~ ^#([0-9]+)$ ]]; then
-              echo "pull/${BASH_REMATCH[1]}/head"
+              echo "refs/pull/${BASH_REMATCH[1]}/head"
             else
               echo "$ref"
             fi
@@ -171,8 +171,8 @@ jobs:
           MEGATRON_PR="${INPUT_MEGATRON_PR}"
           SGLANG_PR="${INPUT_SGLANG_PR}"
           if [ -n "$PR_BODY" ]; then
-            PR_MEGATRON_PR=$(echo "$PR_BODY" | grep -oP '(?<=ci-megatron-pr:\s)\S+' || true)
-            PR_SGLANG_PR=$(echo "$PR_BODY" | grep -oP '(?<=ci-sglang-pr:\s)\S+' || true)
+            PR_MEGATRON_PR=$(echo "$PR_BODY" | grep -m1 -oP '^ci-megatron-pr:\s+\K\S+' || true)
+            PR_SGLANG_PR=$(echo "$PR_BODY" | grep -m1 -oP '^ci-sglang-pr:\s+\K\S+' || true)
             [ -z "$MEGATRON_PR" ] && [ -n "$PR_MEGATRON_PR" ] && MEGATRON_PR="$PR_MEGATRON_PR"
             [ -z "$SGLANG_PR" ] && [ -n "$PR_SGLANG_PR" ] && SGLANG_PR="$PR_SGLANG_PR"
           fi
@@ -181,7 +181,7 @@ jobs:
           resolve_fetch_ref() {
             local ref="$1"
             if [[ "$ref" =~ ^#([0-9]+)$ ]]; then
-              echo "pull/${BASH_REMATCH[1]}/head"
+              echo "refs/pull/${BASH_REMATCH[1]}/head"
             else
               echo "$ref"
             fi
