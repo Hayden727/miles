@@ -51,7 +51,7 @@ jobs:
 
   # Stage B: Fast GPU tests (1 GPU, runs every PR)
   # For fast tests that require GPU (e.g. deterministic inference paths that
-  # pull in flash_attn). Parallel with stage-b-sglang; one self-hosted daemon slot.
+  # pull in flash_attn). Gates the optional GPU suite jobs below.
   stage-b-fast-gpu:
     needs: [stage-a-fast]
     if: |
@@ -63,16 +63,16 @@ jobs:
       execute_command: "python tests/ci/run_suite.py --hw cuda --suite stage-b-fast-1-gpu"
     secrets: inherit
 
-  # Stage B: SGLang patch tests (8 GPU)
-  stage-b-sglang:
-    needs: [stage-a-fast]
+  # Stage C: SGLang patch tests (8 GPU)
+  stage-c-sglang:
+    needs: [stage-b-fast-gpu]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-sglang')))
     uses: ./.github/workflows/_run-ci.yml
     with:
       gpu_count: 8
-      execute_command: "python tests/ci/run_suite.py --hw cuda --suite stage-b-sglang-8-gpu"
+      execute_command: "python tests/ci/run_suite.py --hw cuda --suite stage-c-sglang-8-gpu"
     secrets: inherit
 
   # Stage B: Short 8-GPU tests
@@ -89,7 +89,7 @@ jobs:
 
   # Stage C: FSDP 8-GPU tests
   stage-c-fsdp:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-fsdp')))
@@ -101,7 +101,7 @@ jobs:
 
   # Stage C: Megatron 8-GPU tests (3 partitions)
   stage-c-megatron:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-megatron')))
@@ -117,7 +117,7 @@ jobs:
 
   # Stage C: Precision 8-GPU tests
   stage-c-precision:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-precision')))
@@ -129,7 +129,7 @@ jobs:
 
   # Stage C: Checkpoint 8-GPU tests
   stage-c-ckpt:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-ckpt')))
@@ -141,7 +141,7 @@ jobs:
 
   # Stage C: Long 8-GPU tests
   stage-c-long:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-long')))
@@ -153,7 +153,7 @@ jobs:
 
   # Stage C: LoRA 8-GPU tests
   stage-c-lora:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-lora')))
@@ -165,7 +165,7 @@ jobs:
 
   # Stage C: GLM5 8-GPU tests (custom Docker image, no sglang/megatron deps)
   stage-c-glm5:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-glm5')))
@@ -179,7 +179,7 @@ jobs:
 
   # Stage C: All suites (triggered by run-ci-image label)
   stage-c-all:
-    needs: [stage-b-sglang, stage-b-short]
+    needs: [stage-b-fast-gpu, stage-b-short]
     if: |
       always() && !failure() && !cancelled() &&
       ((github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-image')))
