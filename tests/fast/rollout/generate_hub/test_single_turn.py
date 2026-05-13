@@ -12,7 +12,7 @@ from PIL import Image
 from tests.fast.fixtures.generation_fixtures import GenerateEnv, generation_env, listify, make_sample, run_generate
 from transformers import AutoProcessor
 
-from miles.utils.processing_utils import encode_image_for_rollout_engine
+from miles.utils.data_utils import encode_image_for_rollout_engine
 from miles.utils.test_utils.mock_sglang_server import ProcessResult, ProcessResultMetaInfo
 from miles.utils.types import Sample
 

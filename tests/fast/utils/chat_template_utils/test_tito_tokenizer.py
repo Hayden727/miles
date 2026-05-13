@@ -65,7 +65,7 @@ from miles.utils.chat_template_utils.tito_tokenizer import (
     _build_dummy_assistant,
     get_tito_tokenizer,
 )
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.mock_trajectories import (
     IntermediateSystemTrajectory,
     LongChainTrajectory,

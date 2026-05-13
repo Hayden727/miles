@@ -1,7 +1,7 @@
 import logging
 
-from miles.utils.mask_utils import MultiTurnLossMaskGenerator
-from miles.utils.processing_utils import load_processor, load_tokenizer
+from miles.utils.data_utils import MultiTurnLossMaskGenerator
+from miles.utils.data_utils import load_processor, load_tokenizer
 
 __all__ = ["generate_rollout"]
 

@@ -2,8 +2,8 @@ from tests.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=60, suite="stage-a-fast")
 
-from miles.utils.mask_utils import MultiTurnLossMaskGenerator
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import MultiTurnLossMaskGenerator
+from miles.utils.data_utils import load_tokenizer
 
 
 def test_loss_mask_qwen3_simple(model_name: str = "Qwen/Qwen3-8B"):

@@ -5,7 +5,7 @@ from typing import Annotated
 import typer
 from openai import AsyncOpenAI
 
-from miles.utils.data import read_file
+from miles.utils.data_utils import read_file
 
 
 # can unify w/ sglang_rollout.py later, e.g. add RM, if needed

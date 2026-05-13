@@ -30,7 +30,7 @@ from transformers import AutoTokenizer
 
 from miles.utils.chat_template_utils import TITOTokenizerType, resolve_fixed_chat_template
 from miles.utils.chat_template_utils.template import apply_chat_template
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.chat_template_verify import (
     CaseSpec,
     enable_thinking_variants,

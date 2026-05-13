@@ -11,7 +11,7 @@ from tests.fast.fixtures.generation_fixtures import GenerateEnv, generation_env,
 
 
 from miles.utils.chat_template_utils import TITOTokenizerType, get_tito_tokenizer
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.mock_sglang_server import ProcessResult, ProcessResultMetaInfo
 from miles.utils.test_utils.mock_tools import SAMPLE_TOOLS, ThreeTurnStub, TwoTurnStub
 from miles.utils.types import Sample

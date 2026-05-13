@@ -7,8 +7,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from miles.utils.http_utils import post
-from miles.utils.mask_utils import get_response_lengths
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import get_response_lengths
+from miles.utils.data_utils import load_tokenizer
 from miles.utils.types import Sample
 
 from .radix_tree import StringRadixTrie

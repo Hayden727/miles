@@ -10,10 +10,10 @@ from miles.rollout.inference_rollout.inference_rollout_common import (
     compute_sampling_params,
     generate_and_rm,
 )
-from miles.utils.data import Dataset
+from miles.utils.data_utils import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
 from miles.utils.misc import as_completed_async
-from miles.utils.processing_utils import load_processor, load_tokenizer
+from miles.utils.data_utils import load_processor, load_tokenizer
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)

@@ -135,7 +135,7 @@ def main() -> int:
     # ── Load template/tokenizer ────────────────────────────────────────
     if use_tito_instance:
         from miles.utils.chat_template_utils import resolve_fixed_chat_template
-        from miles.utils.processing_utils import load_tokenizer
+        from miles.utils.data_utils import load_tokenizer
 
         fixed_path, resolved_kwargs = resolve_fixed_chat_template(args.tito_model, sorted(allowed_roles))
         for key, value in resolved_kwargs.items():

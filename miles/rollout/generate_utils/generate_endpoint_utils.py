@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pybase64
 
-from miles.utils.processing_utils import encode_image_for_rollout_engine
+from miles.utils.data_utils import encode_image_for_rollout_engine
 from miles.utils.types import Sample
 
 

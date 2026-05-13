@@ -91,7 +91,7 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
     if processor:
         filtered_samples = []
         for sample in origin_samples:
-            from miles.utils.processing_utils import process_vision_info
+            from miles.utils.data_utils.tokenizer import process_vision_info
 
             multimodal_inputs = process_vision_info(sample.prompt, processor)
             processor_output = processor(text=sample.prompt, **multimodal_inputs)
@@ -211,7 +211,7 @@ class Dataset:
                 output_prompt = prompt
 
             if processor:
-                from miles.utils.processing_utils import process_vision_info
+                from miles.utils.data_utils.tokenizer import process_vision_info
 
                 assert isinstance(
                     prompt, list

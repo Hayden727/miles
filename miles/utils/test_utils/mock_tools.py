@@ -3,7 +3,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.mock_sglang_server import ProcessResult
 
 AGENTIC_MAX_TURNS: int | None = None

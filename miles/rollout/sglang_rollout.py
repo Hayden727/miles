@@ -19,11 +19,11 @@ from miles.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_fil
 from miles.rollout.inference_rollout.compatibility import load_generate_function
 from miles.utils import dumper_utils
 from miles.utils.async_utils import run
-from miles.utils.data import Dataset
+from miles.utils.data_utils import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
 from miles.utils.http_utils import get, post
 from miles.utils.misc import SingletonMeta, load_function
-from miles.utils.processing_utils import (
+from miles.utils.data_utils import (
     build_processor_kwargs,
     encode_image_for_rollout_engine,
     load_processor,

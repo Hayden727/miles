@@ -72,7 +72,7 @@ import pytest
 from transformers import AutoTokenizer
 
 from miles.utils.chat_template_utils.token_seq_comparator import MismatchType, Segment, TokenSeqComparator
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 
 # ---------------------------------------------------------------------------
 # Model configs & fixtures

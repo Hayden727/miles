@@ -15,7 +15,7 @@ from miles.rollout.session.session_errors import (
 )
 from miles.rollout.session.session_types import GetSessionResponse, SessionRecord
 from miles.utils.chat_template_utils import get_tito_tokenizer
-from miles.utils.processing_utils import load_tokenizer
+from miles.utils.data_utils import load_tokenizer
 
 logger = logging.getLogger(__name__)
 

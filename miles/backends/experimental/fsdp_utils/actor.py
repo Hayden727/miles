@@ -15,7 +15,7 @@ from miles.utils import train_dump_utils, train_metric_utils
 from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.memory_utils import clear_memory, print_memory
-from miles.utils.processing_utils import load_processor, load_tokenizer
+from miles.utils.data_utils import load_processor, load_tokenizer
 from miles.utils.ray_utils import Box
 from miles.utils.timer import Timer, inverse_timer, timer
 from miles.utils.tracking_utils import init_tracking

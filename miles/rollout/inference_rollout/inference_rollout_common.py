@@ -17,7 +17,7 @@ from miles.rollout.base_types import (
 from miles.rollout.generate_hub.single_turn import generate
 from miles.rollout.inference_rollout.compatibility import load_generate_function
 from miles.rollout.rm_hub import async_rm, batched_async_rm
-from miles.utils.processing_utils import load_processor, load_tokenizer
+from miles.utils.data_utils import load_processor, load_tokenizer
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)

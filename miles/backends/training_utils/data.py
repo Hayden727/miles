@@ -6,8 +6,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from miles.utils.data import get_minimum_num_micro_batch_size
-from miles.utils.seqlen_balancing import get_seqlen_balanced_partitions
+from miles.utils.data_utils import get_minimum_num_micro_batch_size
+from miles.utils.data_utils import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
 from ...utils.data import process_rollout_data
