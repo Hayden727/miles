@@ -23,7 +23,7 @@ from miles.rollout.inference_rollout.compatibility import (
     load_generate_function,
     load_rollout_function,
 )
-from miles.utils.async_utils import run
+from miles.utils.concurrency_utils import run
 from miles.utils.misc import function_registry
 
 

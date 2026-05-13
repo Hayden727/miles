@@ -15,7 +15,7 @@ from miles.rollout.base_types import GenerateFnInput
 from miles.rollout.inference_rollout.compatibility import load_generate_function
 from miles.rollout.inference_rollout.inference_rollout_common import GenerateState
 from miles.rollout.session.session_server import SessionServer
-from miles.utils.async_utils import run
+from miles.utils.concurrency_utils import run
 from miles.utils.net_utils import find_available_port, init_http_client
 from miles.utils.misc import SingletonMeta
 from miles.utils.test_utils import mock_tools

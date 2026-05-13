@@ -112,7 +112,7 @@ class TestCorrectUsageNoError:
 
     @pytest.mark.asyncio
     async def test_eager_create_task(self):
-        from miles.utils.async_utils import eager_create_task
+        from miles.utils.concurrency_utils import eager_create_task
 
         task = await eager_create_task(_dummy_coroutine())
         result = await task

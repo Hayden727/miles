@@ -40,12 +40,12 @@ from miles.utils.observability_utils import configure_logger
 from miles.utils.observability_utils import MetricChecker
 from miles.utils.observability_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from miles.utils.misc import load_function
-from miles.utils.ray_utils import Box
+from miles.utils.concurrency_utils import Box
 from miles.utils.data_utils import get_seqlen_balanced_partitions
 from miles.utils.tracking_utils import init_tracking
 from miles.utils.types import Sample
 
-from ..utils.metric_utils import has_repetition
+from miles.utils.observability_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)

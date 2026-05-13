@@ -5,7 +5,7 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from miles.utils.async_utils import eager_create_task
+from miles.utils.concurrency_utils import eager_create_task
 
 from ..utils.ray_utils import compute_ray_pin_head_options
 from .actor_group import RayTrainGroup

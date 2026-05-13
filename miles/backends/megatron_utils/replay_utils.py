@@ -1,7 +1,7 @@
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
-from miles.utils.replay_base import BaseReplayManager, RoutingReplayManager
+from miles.utils.replay_utils import BaseReplayManager, RoutingReplayManager
 
 
 def _register_replay_list_moe(replay_list, replay_data, models):

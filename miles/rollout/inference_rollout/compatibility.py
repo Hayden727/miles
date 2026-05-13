@@ -10,7 +10,7 @@ from miles.rollout.base_types import (
     RolloutFnOutput,
     RolloutFnTrainOutput,
 )
-from miles.utils.async_utils import run
+from miles.utils.concurrency_utils import run
 from miles.utils.misc import load_function
 
 

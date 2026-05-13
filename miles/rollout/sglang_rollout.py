@@ -18,7 +18,7 @@ from miles.rollout.base_types import GenerateFnInput, RolloutFnEvalOutput, Rollo
 from miles.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
 from miles.rollout.inference_rollout.compatibility import load_generate_function
 from miles.utils import dumping_utils
-from miles.utils.async_utils import run
+from miles.utils.concurrency_utils import run
 from miles.utils.data_utils import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
 from miles.utils.net_utils import get, post

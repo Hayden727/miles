@@ -9,7 +9,7 @@ import aiohttp
 
 from miles.rollout.data_source import DataSource
 from miles.rollout.sglang_rollout import GenerateState, generate_and_rm_group
-from miles.utils.async_utils import run
+from miles.utils.concurrency_utils import run
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)

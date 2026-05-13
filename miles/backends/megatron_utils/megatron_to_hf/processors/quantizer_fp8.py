@@ -2,7 +2,7 @@ import re
 
 import torch
 
-from miles.utils.fp8_kernel import blockwise_cast_to_fp8_triton
+from miles.utils.hardware_utils import blockwise_cast_to_fp8_triton
 
 from ...sglang import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
 

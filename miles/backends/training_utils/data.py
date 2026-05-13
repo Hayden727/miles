@@ -11,7 +11,7 @@ from miles.utils.data_utils import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
 from miles.utils.data_utils import process_rollout_data
-from miles.utils.ray_utils import Box
+from miles.utils.concurrency_utils import Box
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .parallel import get_parallel_state
 
