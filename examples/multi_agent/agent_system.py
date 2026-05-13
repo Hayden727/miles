@@ -5,7 +5,7 @@ import traceback
 from copy import deepcopy
 
 from miles.rollout.rm_hub import batched_async_rm
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 from miles.utils.types import Sample
 
 from .prompts import SOLVER_PROMPT_TEMPLATE, generate_rewriter_template, generate_select_template

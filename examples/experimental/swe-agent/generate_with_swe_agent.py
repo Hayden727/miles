@@ -8,7 +8,7 @@ from miles.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from miles.rollout.filter_hub.base_types import DynamicFilterOutput
 from miles.rollout.sglang_rollout import GenerateState, eval_rollout
 from miles.utils.async_utils import run
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)

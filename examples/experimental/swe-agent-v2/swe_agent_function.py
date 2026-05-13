@@ -16,7 +16,7 @@ import os
 from typing import Any
 from urllib.parse import urlparse, urlsplit, urlunparse
 
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 
 logger = logging.getLogger(__name__)
 

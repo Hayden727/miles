@@ -34,7 +34,7 @@ from unittest.mock import patch
 
 import pytest
 
-from miles.utils.http_utils import wait_for_server_ready
+from miles.utils.net_utils import wait_for_server_ready
 
 
 def _find_free_port() -> int:
@@ -165,9 +165,9 @@ class TestWaitForServerReadySimulatedDelays:
             return _FakeSocket()
 
         with (
-            patch("miles.utils.http_utils.time.time", side_effect=fake_time_fn),
-            patch("miles.utils.http_utils.time.sleep", side_effect=fake_sleep),
-            patch("miles.utils.http_utils.socket.create_connection", side_effect=fake_connect),
+            patch("miles.utils.net_utils.http.time.time", side_effect=fake_time_fn),
+            patch("miles.utils.net_utils.http.time.sleep", side_effect=fake_sleep),
+            patch("miles.utils.net_utils.http.socket.create_connection", side_effect=fake_connect),
         ):
             wait_for_server_ready("127.0.0.1", 9999, timeout=simulated_delay_s + 10)
 
@@ -190,9 +190,9 @@ class TestWaitForServerReadySimulatedDelays:
             raise OSError("Connection refused")
 
         with (
-            patch("miles.utils.http_utils.time.time", side_effect=fake_time_fn),
-            patch("miles.utils.http_utils.time.sleep", side_effect=fake_sleep),
-            patch("miles.utils.http_utils.socket.create_connection", side_effect=fake_connect),
+            patch("miles.utils.net_utils.http.time.time", side_effect=fake_time_fn),
+            patch("miles.utils.net_utils.http.time.sleep", side_effect=fake_sleep),
+            patch("miles.utils.net_utils.http.socket.create_connection", side_effect=fake_connect),
         ):
             with pytest.raises(RuntimeError, match=f"not ready after {timeout}s"):
                 wait_for_server_ready("127.0.0.1", 9999, timeout=timeout)

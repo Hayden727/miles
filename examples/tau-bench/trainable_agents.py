@@ -11,7 +11,7 @@ from tau_bench.types import Action, RunConfig
 from transformers import AutoTokenizer
 
 from miles.rollout.sglang_rollout import GenerateState
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)

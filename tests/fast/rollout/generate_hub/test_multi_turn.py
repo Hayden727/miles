@@ -731,7 +731,7 @@ class TestAgentNoRecords:
             make_args,
             with_session_server,
         )
-        from miles.utils.http_utils import find_available_port
+        from miles.utils.net_utils import find_available_port
         from miles.utils.misc import SingletonMeta
         from miles.utils.test_utils.mock_sglang_server import with_mock_server
 

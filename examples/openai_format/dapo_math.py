@@ -8,7 +8,7 @@ from typing import Any
 
 
 # Notice: only function based agent can use post API in miles
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 
 
 async def run_agent(

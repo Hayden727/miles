@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 from sglang.srt.entrypoints.openai.protocol import Tool
 from sglang.srt.function_call.function_call_parser import FunctionCallParser
 
-from miles.utils.http_utils import find_available_port
+from miles.utils.net_utils import find_available_port
 from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.uvicorn_thread_server import UvicornThreadServer
 

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from miles.utils.http_utils import is_port_available
+from miles.utils.net_utils import is_port_available
 
 
 # Mainly used for test purpose where `load_function` needs to load many in-flight generated functions

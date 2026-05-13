@@ -7,7 +7,7 @@ from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.mock_sglang_server import ProcessResult
 
 AGENTIC_MAX_TURNS: int | None = None
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 
 SAMPLE_TOOLS = [
     {

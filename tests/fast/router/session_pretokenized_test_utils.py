@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from miles.rollout.session.session_server import SessionServer
 from miles.utils.chat_template_utils import MismatchType, apply_chat_template, get_tito_tokenizer
-from miles.utils.http_utils import find_available_port
+from miles.utils.net_utils import find_available_port
 from miles.utils.data_utils import load_tokenizer
 from miles.utils.test_utils.uvicorn_thread_server import UvicornThreadServer
 

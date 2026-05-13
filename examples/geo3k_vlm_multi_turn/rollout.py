@@ -11,7 +11,7 @@ from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
 
 # When executed as a module: python -m examples.vlm_multi_turn.rollout
 from miles.rollout.sglang_rollout import GenerateState
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 from miles.utils.data_utils import encode_image_for_rollout_engine
 from miles.utils.types import Sample
 

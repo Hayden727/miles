@@ -21,7 +21,7 @@ from miles.utils import dumper_utils
 from miles.utils.async_utils import run
 from miles.utils.data_utils import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
-from miles.utils.http_utils import get, post
+from miles.utils.net_utils import get, post
 from miles.utils.misc import SingletonMeta, load_function
 from miles.utils.data_utils import (
     build_processor_kwargs,

@@ -1,5 +1,5 @@
 from sglang.srt.server_args import ServerArgs
-from miles.utils.http_utils import _wrap_ipv6
+from miles.utils.net_utils import _wrap_ipv6
 
 
 # TODO: use all sglang router arguments with `--sglang-router` prefix

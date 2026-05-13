@@ -8,7 +8,7 @@ from miles.rollout.generate_utils.generate_endpoint_utils import (
     compute_request_payload,
     update_sample_from_response,
 )
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 from miles.utils.types import Sample
 
 

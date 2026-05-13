@@ -139,7 +139,7 @@ def _launch_background():
 def _launch_sglang_router():
     from sglang_router.launch_router import RouterArgs
 
-    from miles.utils.http_utils import run_router
+    from miles.utils.net_utils import run_router
 
     print("launch_sglang_router", flush=True)
     router_args = RouterArgs(

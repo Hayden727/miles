@@ -43,7 +43,7 @@ async def configure_sglang(args: Namespace) -> None:
         return
 
     from miles.rollout.inference_rollout.inference_rollout_train import get_worker_urls
-    from miles.utils.http_utils import post
+    from miles.utils.net_utils import post
 
     worker_urls = await get_worker_urls(args)
     overrides = _get_phase_override_configs(args, DumperPhase.INFERENCE)

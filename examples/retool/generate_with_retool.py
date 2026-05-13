@@ -8,7 +8,7 @@ except ImportError as e:
     raise ImportError("Jinja2 is required. Please install it with: pip install jinja2") from e
 
 from miles.rollout.sglang_rollout import GenerateState
-from miles.utils.http_utils import post
+from miles.utils.net_utils import post
 from miles.utils.types import Sample
 
 # Import reward models

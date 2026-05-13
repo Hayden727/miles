@@ -27,7 +27,7 @@ from miles.rollout.inference_rollout.compatibility import call_rollout_function,
 from miles.utils import dumper_utils, tracking_utils
 from miles.utils.environ import enable_experimental_rollout_refactor
 from miles.utils.health_monitor import RolloutHealthMonitor
-from miles.utils.http_utils import (
+from miles.utils.net_utils import (
     _wrap_ipv6,
     find_available_port,
     get_host_info,
@@ -937,7 +937,7 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     else:
         from sglang_router.launch_router import RouterArgs
 
-        from miles.utils.http_utils import run_router
+        from miles.utils.net_utils import run_router
 
         router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
         router_args.host = router_ip

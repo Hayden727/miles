@@ -9,7 +9,7 @@ import pytest
 import requests
 
 from miles.router.router import MilesRouter
-from miles.utils.http_utils import find_available_port
+from miles.utils.net_utils import find_available_port
 from miles.utils.test_utils.mock_sglang_server import MockSGLangServer, default_process_fn
 from miles.utils.test_utils.uvicorn_thread_server import UvicornThreadServer
 
