@@ -10,8 +10,8 @@ from miles.utils.data_utils import get_minimum_num_micro_batch_size
 from miles.utils.data_utils import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
-from ...utils.data import process_rollout_data
-from ...utils.ray_utils import Box
+from miles.utils.data_utils import process_rollout_data
+from miles.utils.ray_utils import Box
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .parallel import get_parallel_state
 

@@ -24,9 +24,9 @@ from miles.rollout.base_types import (
     call_rollout_fn,
 )
 from miles.rollout.inference_rollout.compatibility import call_rollout_function, load_rollout_function
-from miles.utils import dumper_utils, tracking_utils
+from miles.utils import dumping_utils, tracking_utils
 from miles.utils.environ import enable_experimental_rollout_refactor
-from miles.utils.health_monitor import RolloutHealthMonitor
+from miles.utils.profiling_utils import RolloutHealthMonitor
 from miles.utils.net_utils import (
     _wrap_ipv6,
     find_available_port,
@@ -139,7 +139,7 @@ class ServerGroup:
                     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
                 }.items()
             }
-            env_vars.update(dumper_utils.get_sglang_env(self.args))
+            env_vars.update(dumping_utils.get_sglang_env(self.args))
 
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,

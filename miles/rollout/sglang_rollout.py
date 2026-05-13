@@ -17,7 +17,7 @@ from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, is_lora_
 from miles.rollout.base_types import GenerateFnInput, RolloutFnEvalOutput, RolloutFnTrainOutput
 from miles.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
 from miles.rollout.inference_rollout.compatibility import load_generate_function
-from miles.utils import dumper_utils
+from miles.utils import dumping_utils
 from miles.utils.async_utils import run
 from miles.utils.data_utils import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
@@ -391,7 +391,7 @@ async def generate_rollout_async(
     """
     assert args.rollout_global_dataset
 
-    await dumper_utils.configure_sglang(args)
+    await dumping_utils.configure_sglang(args)
 
     state = GenerateState(args)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from miles.utils.memory_utils import print_memory
+from miles.utils.profiling_utils import print_memory
 
 logger = logging.getLogger(__name__)
 

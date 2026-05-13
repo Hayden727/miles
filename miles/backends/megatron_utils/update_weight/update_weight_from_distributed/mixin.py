@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.distributed_utils import get_gloo_group
-from miles.utils.timer import timer
+from miles.utils.profiling_utils import timer
 
 from ...megatron_to_hf import convert_to_hf
 from ..common import all_gather_param, collect_named_tensors_for_weight_transfer, post_process_weights

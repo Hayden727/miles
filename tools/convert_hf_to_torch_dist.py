@@ -15,7 +15,7 @@ from miles.backends.megatron_utils.arguments import set_default_megatron_args
 from miles.backends.megatron_utils.initialize import init
 from miles.backends.megatron_utils.model_provider import get_model_provider_func
 from miles.utils.observability_utils import configure_logger
-from miles.utils.memory_utils import print_memory
+from miles.utils.profiling_utils import print_memory
 from miles_plugins.models.hf_attention import _load_hf_config
 
 

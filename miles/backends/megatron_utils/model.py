@@ -21,8 +21,8 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from miles.utils.dumper_utils import DumperMegatronUtil, DumperPhase
-from miles.utils.memory_utils import clear_memory
+from miles.utils.dumping_utils import DumperMegatronUtil, DumperPhase
+from miles.utils.profiling_utils import clear_memory
 
 from ..training_utils.ci_utils import check_grad_norm, check_kl
 from ..training_utils.data import DataIterator, get_batch

@@ -5,7 +5,7 @@ from copy import deepcopy
 
 from miles.utils import tracking_utils
 from miles.utils.observability_utils import compute_rollout_step
-from miles.utils.timer import Timer
+from miles.utils.profiling_utils import Timer
 
 logger = logging.getLogger(__name__)
 

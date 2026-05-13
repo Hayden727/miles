@@ -12,20 +12,20 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig
 
 from miles.ray.train_actor import TrainRayActor
-from miles.utils import train_dump_utils
+from miles.utils.dumping_utils import save_debug_train_data
 from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group, init_process_group
-from miles.utils.memory_utils import clear_memory, print_memory
+from miles.utils.profiling_utils import clear_memory, print_memory
 from miles.utils.data_utils import load_tokenizer
 from miles.utils.ray_utils import Box
 from miles.utils.distributed_utils.reloadable import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from miles.utils.replay_base import all_replay_managers
-from miles.utils.timer import Timer, inverse_timer, timer
+from miles.utils.profiling_utils import Timer, inverse_timer, timer
 from miles.utils.tracking_utils import init_tracking
 from miles.utils.types import RolloutBatch
 
-from ...utils.profile_utils import TrainProfiler
-from ...utils.tensor_backper import TensorBackuper
+from miles.utils.profiling_utils import TrainProfiler
+from miles.utils.tensor_backper import TensorBackuper
 from ..training_utils.cp_utils import slice_with_cp
 from ..training_utils.data import DataIterator, get_data_iterator, get_rollout_data, sync_actor_critic_data
 from ..training_utils.log_utils import log_cpu_memory, log_perf_data, log_rollout_data
@@ -445,7 +445,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.step(rollout_id=rollout_id)
 
-        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+        save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         for m in all_replay_managers:
             if m.enabled:

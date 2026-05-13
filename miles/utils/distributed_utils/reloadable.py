@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import torch
 import torch.distributed as dist
 
-from miles.utils.memory_utils import print_memory
+from miles.utils.profiling_utils import print_memory
 
 logger = logging.getLogger(__name__)
 

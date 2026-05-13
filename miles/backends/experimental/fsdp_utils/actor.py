@@ -11,17 +11,17 @@ from tqdm import tqdm
 from transformers import AutoConfig
 
 from miles.ray.train_actor import TrainRayActor
-from miles.utils import train_dump_utils
+from miles.utils.dumping_utils import save_debug_train_data
 from miles.utils.training_utils import log_perf_data_raw
 from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group
-from miles.utils.memory_utils import clear_memory, print_memory
+from miles.utils.profiling_utils import clear_memory, print_memory
 from miles.utils.data_utils import load_processor, load_tokenizer
 from miles.utils.ray_utils import Box
-from miles.utils.timer import Timer, inverse_timer, timer
+from miles.utils.profiling_utils import Timer, inverse_timer, timer
 from miles.utils.tracking_utils import init_tracking
 
-from ....utils.profile_utils import TrainProfiler
+from miles.utils.profiling_utils import TrainProfiler
 from ...training_utils.ci_utils import check_grad_norm
 from ...training_utils.data import DataIterator, get_batch, get_data_iterator, get_rollout_data
 from ...training_utils.log_utils import (
@@ -512,7 +512,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.prof.step(rollout_id=rollout_id)
 
         if self.args.save_debug_train_data is not None:
-            train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+            save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         # Update ref model if needed (copy actor weights to ref)
         if (
