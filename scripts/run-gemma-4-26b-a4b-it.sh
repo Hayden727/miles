@@ -110,6 +110,9 @@ WANDB_ARGS=()
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 4
    --sglang-mem-fraction-static 0.7
+   # Gemma 4 has head_dim=512 on global layers, above the FlashAttention
+   # cap of 256. Triton attention backend handles any head_dim.
+   --sglang-attention-backend triton
    # Replay the exact rollout routing during training forward so
    # train logprobs match rollout logprobs (needed for MoE).
    --use-miles-router
