@@ -23,11 +23,13 @@ MODEL_ARGS=(
    --hidden-size 2816
    --ffn-hidden-size 2112
    --normalization RMSNorm
+   --norm-epsilon 1e-06
    --position-embedding-type rope
    --rotary-base 1000000
    --vocab-size 262144
    --make-vocab-size-divisible-by 128
    --max-position-embeddings 262144
+   # tie_word_embeddings=True per HF config; do not pass --untie-embeddings-and-output-weights
 
    # MoE specifics (matches nemotron-3-nano-30b-a3b style; routing replay
    # requires the radixark/Megatron-Bridge bridge port from
