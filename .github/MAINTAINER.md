@@ -131,21 +131,6 @@ take on more responsibility and are qualified, please ping
 @Ying1123 and @fzyzcjy in
 the Slack channel. They will start a nomination and internal review process.
 
-## The List of CI Oncalls
-
-This section lists the oncalls for each hardware platform. The format is
-@github-username (Slack username, if different).
-
-### NVIDIA GPUs
-_TBD — please contribute names._
-
-### AMD GPUs
-_TBD — please contribute names._
-
-This list is based on the current situation. If you or someone you know would like to
-donate machines for CI, they can serve as CI oncalls for their machines. Please ping
-@Ying1123 and @fzyzcjy in
-the Slack channel. They will start a nomination and internal review process.
 
 ## CI Maintenance Mode
 
@@ -178,10 +163,3 @@ Notes:
 
 Remove the directive from the issue body to lift the rebase requirement (closing the
 issue alone does not lift it).
-
-## Suspending Permissions
-
-If a Merge Oncall bypasses checks to merge a PR that breaks `main`, merges a non-CI-fix
-PR during CI Maintenance Mode, or repeatedly breaks the CI for various reasons, their
-privileges will be suspended for at least two days, depending on the severity of the
-incident.
