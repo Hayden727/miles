@@ -278,6 +278,9 @@ def forward_only(
         packed_seq_params = get_packed_seq_params(batch, args)
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
+        model_kwargs = {}
+        if args.true_on_policy_mode:
+            model_kwargs["fp32_output"] = False
         with _sglang_moe_rollout_context(batch):
             output_tensor = model(
                 input_ids=tokens,
@@ -287,6 +290,7 @@ def forward_only(
                 packed_seq_params=packed_seq_params,
                 loss_mask=batch["full_loss_masks"],
                 padding_mask=batch["padding_mask"],
+                **model_kwargs,
                 **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
             )
 
@@ -509,10 +513,6 @@ def train_one_step(
     # Dump backward tensors while gradients are still attached. The optimizer
     # step and subsequent zero_grad release them.
     dumper_phase_util.finalize(model)
-
-    from ..training_utils.grad_audit import write_grad_audit
-
-    write_grad_audit(args, rollout_id, step_id, model)
 
     if not disable_optimizer and valid_step:
         # Update parameters.

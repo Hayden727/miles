@@ -56,6 +56,7 @@ def test_qwen3_moe_script_true_on_policy_tp1_ep4_cp2_contract(monkeypatch):
     assert "ROW_LINEAR_ENABLE_INV" not in env_vars
     assert "NCCL_ALGO" not in env_vars
     assert "NCCL_ALGO=Ring" in config.extra_env_vars
+    assert "NCCL_NVLS_ENABLE=0" in config.extra_env_vars
     assert "MODEL_ARGS_DISABLE_MOE_PERMUTE_FUSION=1" in config.extra_env_vars
 
 
@@ -76,108 +77,3 @@ def test_qwen3_moe_default_rollout_engine_size_fits_sglang_ep():
 
     assert args.sglang_expert_parallel_size == 4
     assert args.rollout_num_gpus_per_engine == 8
-
-
-def test_qwen3_moe_script_fast_decode_does_not_default_to_prefill_recompute(monkeypatch):
-    captured = {}
-
-    def fake_execute_train(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "execute_train", fake_execute_train)
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "get_default_wandb_args", lambda *args, **kwargs: "")
-
-    args = run_qwen3_30b_a3b.ScriptArgs(
-        mode="normal",
-        run_id="unit-test-moe-fast-decode",
-        true_on_policy=True,
-        true_on_policy_fast_decode=True,
-        enable_eval=False,
-        tensor_model_parallel_size=1,
-        context_parallel_size=2,
-        cp_comm_type="a2a",
-        expert_model_parallel_size=4,
-        expert_tensor_parallel_size=1,
-        rollout_num_gpus=8,
-        rollout_num_gpus_per_engine=4,
-    )
-
-    run_qwen3_30b_a3b.execute(args)
-
-    train_args = captured["train_args"]
-
-    assert "--sglang-enable-deterministic-inference" not in train_args
-    assert "--sglang-enable-prefill-only-deterministic-inference" in train_args
-    assert "--sglang-disable-cuda-graph" not in train_args
-    assert "--true-on-policy-fast-decode" in train_args
-    assert "--recompute-logprobs-via-prefill" not in train_args
-
-
-def test_qwen3_moe_script_prefill_recompute_can_be_enabled_explicitly(monkeypatch):
-    captured = {}
-
-    def fake_execute_train(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "execute_train", fake_execute_train)
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "get_default_wandb_args", lambda *args, **kwargs: "")
-
-    args = run_qwen3_30b_a3b.ScriptArgs(
-        mode="normal",
-        run_id="unit-test-moe-fast-decode-prefill-recompute",
-        true_on_policy=True,
-        true_on_policy_fast_decode=True,
-        true_on_policy_recompute_logprobs_via_prefill=True,
-        enable_eval=False,
-        tensor_model_parallel_size=1,
-        context_parallel_size=2,
-        cp_comm_type="a2a",
-        expert_model_parallel_size=4,
-        expert_tensor_parallel_size=1,
-        rollout_num_gpus=8,
-        rollout_num_gpus_per_engine=4,
-    )
-
-    run_qwen3_30b_a3b.execute(args)
-
-    train_args = captured["train_args"]
-
-    assert "--sglang-enable-deterministic-inference" not in train_args
-    assert "--sglang-enable-prefill-only-deterministic-inference" in train_args
-    assert "--true-on-policy-fast-decode" in train_args
-    assert "--recompute-logprobs-via-prefill" in train_args
-
-
-def test_qwen3_moe_script_fast_decode_can_skip_prefill_recompute(monkeypatch):
-    captured = {}
-
-    def fake_execute_train(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "execute_train", fake_execute_train)
-    monkeypatch.setattr(run_qwen3_30b_a3b.U, "get_default_wandb_args", lambda *args, **kwargs: "")
-
-    args = run_qwen3_30b_a3b.ScriptArgs(
-        mode="normal",
-        run_id="unit-test-moe-fast-decode-no-prefill-recompute",
-        true_on_policy=True,
-        true_on_policy_fast_decode=True,
-        true_on_policy_recompute_logprobs_via_prefill=False,
-        enable_eval=False,
-        tensor_model_parallel_size=1,
-        context_parallel_size=2,
-        cp_comm_type="a2a",
-        expert_model_parallel_size=4,
-        expert_tensor_parallel_size=1,
-        rollout_num_gpus=8,
-        rollout_num_gpus_per_engine=4,
-    )
-
-    run_qwen3_30b_a3b.execute(args)
-
-    train_args = captured["train_args"]
-
-    assert "--sglang-enable-deterministic-inference" not in train_args
-    assert "--sglang-enable-prefill-only-deterministic-inference" in train_args
-    assert "--true-on-policy-fast-decode" in train_args
-    assert "--recompute-logprobs-via-prefill" not in train_args

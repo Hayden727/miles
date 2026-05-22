@@ -90,6 +90,7 @@ def test_qwen3_script_true_on_policy_tp2_cp4_normal_topology_contract(monkeypatc
     assert "--no-rope-fusion" in train_args
     assert "--sequence-parallel" not in train_args
     assert env_vars["NCCL_ALGO"] == "Ring"
+    assert env_vars["NCCL_NVLS_ENABLE"] == "0"
     assert env_vars["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] == "0"
     assert env_vars["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
     assert "ROW_LINEAR_ENABLE_INV" not in env_vars

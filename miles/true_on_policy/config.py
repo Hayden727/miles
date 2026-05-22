@@ -75,7 +75,6 @@ class TrueOnPolicyKernelPolicy:
 
     contract: TrueOnPolicyContract
     deterministic_inference: bool
-    prefill_only_deterministic_inference: bool
     deterministic_training: bool
     sglang_attention_backend: str
     megatron_uses_sglang_backend: bool
@@ -91,6 +90,7 @@ class TrueOnPolicyKernelPolicy:
     ep_invariant_moe: bool
     sglang_attention_data_parallel_size: int
     disable_sglang_cuda_graph: bool
+    rollout_tp_size: int
 
     def build_sglang_args(self) -> TrueOnPolicyArgList:
         values = [
@@ -101,8 +101,6 @@ class TrueOnPolicyKernelPolicy:
         ]
         if self.disable_sglang_cuda_graph:
             values.insert(0, "--sglang-disable-cuda-graph")
-        if self.prefill_only_deterministic_inference:
-            values.insert(0, "--sglang-enable-prefill-only-deterministic-inference")
         if self.deterministic_inference:
             values.insert(0, "--sglang-enable-deterministic-inference")
         if self.sglang_attention_data_parallel_size > 1:
@@ -127,7 +125,10 @@ class TrueOnPolicyKernelPolicy:
                     "--use-cpu-initialization",
                 ]
             )
-        if self.batch_invariant_mode:
+        if (
+            self.batch_invariant_mode
+            and os.environ.get("MILES_TRUE_ON_POLICY_DISABLE_BATCH_INVARIANT", "0") != "1"
+        ):
             values.append("--batch-invariant-mode")
         if self.disable_bias_swiglu_fusion:
             values.append("--no-bias-swiglu-fusion")
@@ -138,8 +139,11 @@ class TrueOnPolicyKernelPolicy:
     def build_env_vars(self) -> dict[str, str]:
         env = {
             "NCCL_ALGO": os.environ.get("NCCL_ALGO", "Ring"),
+            "NCCL_NVLS_ENABLE": "0",
             "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+            "MILES_TRUE_ON_POLICY_ROLLOUT_TP_SIZE": str(self.rollout_tp_size),
+            "SGLANG_TRUE_ON_POLICY_FUSED_RMSNORM": "1",
         }
         if self.batch_invariant_mode:
             env.update(
@@ -196,8 +200,6 @@ class TrueOnPolicyConfig:
     rollout_expert_parallel_size: int = 1
     train_world_size: int | None = None
     contract_override: str | None = None
-    fast_decode: bool = False
-    recompute_logprobs_via_prefill: bool = False
 
     @property
     def parallel_layout(self) -> TrueOnPolicyParallelLayout:
@@ -301,32 +303,16 @@ class TrueOnPolicyConfig:
             train_backend=self.train_backend,
             parallel_layout=self.parallel_layout,
         )
-        if self.fast_decode:
-            policy_kwargs["deterministic_inference"] = False
-            policy_kwargs["disable_sglang_cuda_graph"] = False
+        policy_kwargs["rollout_tp_size"] = self.rollout_num_gpus_per_engine
         return TrueOnPolicyKernelPolicy(
             contract=self.contract,
-            prefill_only_deterministic_inference=self.fast_decode,
             **policy_kwargs,
         )
 
     def build_launch_plan(self) -> TrueOnPolicyLaunchPlan:
         self.validate()
         kernel_policy = self.build_kernel_policy()
-        miles_args = TrueOnPolicyArgList(
-            tuple(
-                value
-                for value in (
-                    "--deterministic-mode",
-                    "--true-on-policy-mode",
-                    "--recompute-logprobs-via-prefill"
-                    if self.recompute_logprobs_via_prefill
-                    else None,
-                    "--true-on-policy-fast-decode" if self.fast_decode else None,
-                )
-                if value is not None
-            )
-        )
+        miles_args = TrueOnPolicyArgList(("--deterministic-mode", "--true-on-policy-mode"))
 
         if self.train_backend == "megatron":
             megatron_args = kernel_policy.build_megatron_args()
@@ -367,13 +353,6 @@ def _get_optional_int(args: Any, name: str, default: int) -> int:
     return int(value)
 
 
-def _get_optional_bool(args: Any, name: str, default: bool) -> bool:
-    value = getattr(args, name, default)
-    if value is None:
-        return default
-    return bool(value)
-
-
 def build_true_on_policy_config(args: Any) -> TrueOnPolicyConfig | None:
     if not getattr(args, "true_on_policy", False):
         return None
@@ -399,10 +378,6 @@ def build_true_on_policy_config(args: Any) -> TrueOnPolicyConfig | None:
         rollout_expert_parallel_size=_get_optional_int(args, "sglang_expert_parallel_size", 1),
         train_world_size=train_world_size,
         contract_override=getattr(args, "true_on_policy_contract", None),
-        fast_decode=getattr(args, "true_on_policy_fast_decode", False),
-        recompute_logprobs_via_prefill=_get_optional_bool(
-            args, "true_on_policy_recompute_logprobs_via_prefill", False
-        ),
     )
 
 

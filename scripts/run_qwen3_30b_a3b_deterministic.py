@@ -20,8 +20,6 @@ from miles.true_on_policy import apply_true_on_policy_script_defaults, build_tru
 class ScriptArgs(BaseScriptArgs):
     true_on_policy: bool = True
     true_on_policy_contract: str | None = None
-    true_on_policy_fast_decode: bool = False
-    true_on_policy_recompute_logprobs_via_prefill: bool = False
     true_on_policy_default_rollout_ep: bool = True
 
     def __post_init__(self):

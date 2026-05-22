@@ -149,43 +149,19 @@ def test_recompute_logprobs_via_prefill_flag_is_parsed():
     assert args.recompute_logprobs_via_prefill is True
 
 
-def test_true_on_policy_fast_decode_does_not_require_prefill_recompute_flag_to_parse():
-    parser = argparse.ArgumentParser()
-    get_miles_extra_args_provider()(parser)
-
-    args = parser.parse_args(["--true-on-policy-fast-decode"] + REQUIRED_ARGS)
-
-    assert args.true_on_policy_fast_decode is True
-    assert args.recompute_logprobs_via_prefill is False
-
-
 @pytest.mark.parametrize(
     (
         "rollout_num_gpus_per_engine",
         "sglang_attention_context_parallel_size",
-        "recompute_logprobs_via_prefill",
-        "true_on_policy_fast_decode",
-        "expected_target",
-        "expected_prefill_only",
-        "expected_deterministic",
-        "expected_dp_lm_head",
     ),
     [
-        (1, 1, False, False, "fsdp", False, True, False),
-        (4, 1, True, False, "fsdp_tp", True, True, False),
-        (8, 4, True, False, "fsdp_tp", True, True, False),
-        (4, 1, True, True, "fsdp_tp", True, False, False),
+        (1, 1),
+        (8, 4),
     ],
 )
 def test_true_on_policy_args_propagate_to_sglang_server_args(
     rollout_num_gpus_per_engine: int,
     sglang_attention_context_parallel_size: int,
-    recompute_logprobs_via_prefill: bool,
-    true_on_policy_fast_decode: bool,
-    expected_target: str,
-    expected_prefill_only: bool,
-    expected_deterministic: bool,
-    expected_dp_lm_head: bool,
 ):
     args = SimpleNamespace(
         rollout_num_gpus_per_engine=rollout_num_gpus_per_engine,
@@ -198,8 +174,7 @@ def test_true_on_policy_args_propagate_to_sglang_server_args(
         sglang_router_policy=None,
         sglang_router_ip=None,
         true_on_policy_mode=True,
-        recompute_logprobs_via_prefill=recompute_logprobs_via_prefill,
-        true_on_policy_fast_decode=true_on_policy_fast_decode,
+        recompute_logprobs_via_prefill=False,
         sglang_true_on_policy_contract="qwen3_dense_true_on_policy_v1",
         sglang_enable_deterministic_inference=False,
         sglang_enable_prefill_only_deterministic_inference=False,
@@ -222,14 +197,14 @@ def test_true_on_policy_args_propagate_to_sglang_server_args(
         port=30000,
     )
 
-    assert args.sglang_enable_deterministic_inference is expected_deterministic
-    assert args.sglang_enable_prefill_only_deterministic_inference is expected_prefill_only
-    assert args.sglang_enable_dp_lm_head is expected_dp_lm_head
+    assert args.sglang_enable_deterministic_inference is True
+    assert args.sglang_enable_prefill_only_deterministic_inference is False
+    assert args.sglang_enable_dp_lm_head is False
     assert "rl_on_policy_target" not in server_args
     assert server_args["true_on_policy_contract"] == "qwen3_dense_true_on_policy_v1"
-    assert server_args["enable_deterministic_inference"] is expected_deterministic
-    assert server_args["enable_prefill_only_deterministic_inference"] is expected_prefill_only
-    assert server_args["enable_dp_lm_head"] is expected_dp_lm_head
+    assert server_args["enable_deterministic_inference"] is True
+    assert server_args["enable_prefill_only_deterministic_inference"] is False
+    assert server_args["enable_dp_lm_head"] is False
 
 
 def test_true_on_policy_sglang_cp_dp_lm_head_overrides_engine_defaults():

@@ -6,6 +6,7 @@ from typing import Any
 import ray
 import torch
 import torch.distributed as dist
+from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
 
@@ -21,8 +22,6 @@ from .update_weight_from_distributed.broadcast import (
     disconnect_rollout_engines_from_distributed,
     update_weights_from_distributed,
 )
-from .weight_audit import write_weight_audit
-
 logger = logging.getLogger(__name__)
 
 
@@ -232,23 +231,11 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
 
         megatron_local_weights = self.weights_getter()
-        write_weight_audit(
-            stage="megatron_local",
-            weight_version=self.weight_version,
-            tensors=megatron_local_weights,
-        )
-
         # For LoRA+distributed: base weights are frozen, skip after first round.
         if not (self.is_lora and self.use_distribute and self._lora_base_synced):
             for chunk_index, hf_named_tensors in enumerate(
                 self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, weight_type="base")
             ):
-                write_weight_audit(
-                    stage="hf_chunk_base",
-                    weight_version=self.weight_version,
-                    tensors=hf_named_tensors,
-                    chunk_index=chunk_index,
-                )
                 refs, long_lived_tensors = self._send_base_params(hf_named_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=False)

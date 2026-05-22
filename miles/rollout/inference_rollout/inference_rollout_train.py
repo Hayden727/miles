@@ -153,13 +153,11 @@ async def generate_rollout_async(
     if f := load_function(args.rollout_all_samples_process_path):
         f(args, all_samples, data_source)
 
-    prefill_logprob_metrics = await recompute_samples_rollout_logprobs_via_prefill(
+    await recompute_samples_rollout_logprobs_via_prefill(
         args,
         [sample for group in data for sample in group],
         url=f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate",
         sampling_params=state.sampling_params,
     )
 
-    metrics = metric_gatherer.collect()
-    metrics.update({f"perf/{key}": value for key, value in prefill_logprob_metrics.items()})
-    return RolloutFnTrainOutput(samples=data, metrics=metrics), aborted_samples
+    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
