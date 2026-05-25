@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from scripts import run_qwen3_30b_a3b as base_run_qwen3_30b_a3b
 from scripts import run_qwen3_30b_a3b_deterministic as run_qwen3_30b_a3b
 
 
@@ -236,8 +235,8 @@ def test_qwen3_moe_pp_uses_topology_specific_torch_dist_checkpoint():
         use_sequence_parallel=False,
     )
 
-    checkpoint_path = base_run_qwen3_30b_a3b._megatron_torch_dist_path(args)
-    conversion_args = base_run_qwen3_30b_a3b._megatron_torch_dist_conversion_args(args)
+    checkpoint_path = run_qwen3_30b_a3b._megatron_torch_dist_path(args)
+    conversion_args = run_qwen3_30b_a3b._megatron_torch_dist_conversion_args(args)
 
     assert checkpoint_path == "/models/Qwen3-30B-A3B_torch_dist_tp1_pp2_ep4_etp1"
     assert "--tensor-model-parallel-size 1" in conversion_args
@@ -263,8 +262,8 @@ def test_qwen3_moe_pp1_uses_topology_specific_torch_dist_checkpoint_path():
         use_sequence_parallel=True,
     )
 
-    checkpoint_path = base_run_qwen3_30b_a3b._megatron_torch_dist_path(args)
-    conversion_args = base_run_qwen3_30b_a3b._megatron_torch_dist_conversion_args(args)
+    checkpoint_path = run_qwen3_30b_a3b._megatron_torch_dist_path(args)
+    conversion_args = run_qwen3_30b_a3b._megatron_torch_dist_conversion_args(args)
 
     assert checkpoint_path == "/models/Qwen3-30B-A3B_torch_dist_tp2_pp1_ep4_etp1"
     assert "--tensor-model-parallel-size 2" in conversion_args
