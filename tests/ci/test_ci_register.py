@@ -549,3 +549,82 @@ class TestCollectTestsSuspiciousPattern:
         )
         registries = collect_tests([path], sanity_check=True)
         assert registries[0].implicit is True
+
+
+# --- AC-9 regression guard: no semantic-default register_cpu_ci remains ------
+
+
+def _is_semantic_default_register_cpu_ci(call: ast.Call) -> bool:
+    """Mirror of `strip_default_cpu_register._is_default_form_register_cpu_ci`.
+
+    True when the call matches either the 3-kwarg full default form or the
+    2-kwarg omitted-`labels` form (both equivalent to the implicit fallback
+    synthesised by `collect_tests` for files under `tests/fast/`).
+    """
+    if not isinstance(call.func, ast.Name) or call.func.id != "register_cpu_ci":
+        return False
+    if call.args:
+        return False
+    kwarg_names = {kw.arg for kw in call.keywords}
+    accepted = ({"est_time", "suite", "labels"}, {"est_time", "suite"})
+    if kwarg_names not in accepted:
+        return False
+    for kw in call.keywords:
+        if kw.arg == "est_time":
+            if not isinstance(kw.value, ast.Constant) or kw.value.value != 10:
+                return False
+        elif kw.arg == "suite":
+            if not isinstance(kw.value, ast.Constant) or kw.value.value != "stage-a-cpu":
+                return False
+        elif kw.arg == "labels":
+            if not isinstance(kw.value, ast.List) or kw.value.elts:
+                return False
+        else:
+            return False
+    return True
+
+
+class TestNoSemanticDefaultRegisterCpuCi:
+    """AC-9 meta-test: every file under `tests/fast/` that still calls
+    `register_cpu_ci` must do so with a *non-default* signature.
+
+    The implicit-CPU-registration fallback in `collect_tests` already
+    synthesises the equivalent of `register_cpu_ci(est_time=10,
+    suite="stage-a-cpu", labels=[])` for any `tests/fast/**/*.py` file with
+    no top-level register call, so a literal default-form caller is
+    redundant. This test scans the real tree and fails on any reintroduced
+    default to keep the codemod's guarantee enforced.
+    """
+
+    def test_no_default_form_register_cpu_ci_in_tests_fast(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        fast_root = repo_root / "tests" / "fast"
+        if not fast_root.is_dir():
+            pytest.skip(f"{fast_root} does not exist in this checkout")
+
+        offenders: list[str] = []
+        for py in sorted(fast_root.rglob("*.py")):
+            try:
+                text = py.read_text()
+            except OSError:
+                continue
+            try:
+                tree = ast.parse(text, filename=str(py))
+            except SyntaxError:
+                continue
+            for node in tree.body:
+                if not isinstance(node, ast.Expr):
+                    continue
+                if not isinstance(node.value, ast.Call):
+                    continue
+                if _is_semantic_default_register_cpu_ci(node.value):
+                    rel = py.relative_to(repo_root)
+                    offenders.append(f"{rel}:{node.lineno}")
+
+        assert not offenders, (
+            "found semantic-default register_cpu_ci call(s) under tests/fast/; "
+            "the implicit fallback in tests/ci/ci_register.collect_tests already "
+            "synthesises the equivalent registry. Remove these calls (and the "
+            "orphan import) or run scripts/tools/strip_default_cpu_register.py.\n"
+            "Offenders:\n  " + "\n  ".join(offenders)
+        )

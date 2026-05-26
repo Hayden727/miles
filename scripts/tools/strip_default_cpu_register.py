@@ -1,15 +1,28 @@
 """One-shot codemod: strip default-form `register_cpu_ci` calls from tests/fast/.
 
 After the directory-based implicit CPU registration landed in
-`tests/ci/ci_register.py`, any `tests/fast/**/*.py` file calling
-`register_cpu_ci(est_time=10, suite="stage-a-cpu", labels=[])` is redundant
+`tests/ci/ci_register.py`, any `tests/fast/**/*.py` file whose
+`register_cpu_ci(...)` call matches the *semantic* default is redundant
 with the collector's implicit fallback. This script removes those calls
 plus the now-orphan `from tests.ci.ci_register import register_cpu_ci`
 imports.
 
-The script is intentionally conservative:
-- Only matches the *exact* default form: kwargs `est_time=10`, `suite="stage-a-cpu"`, `labels=[]`. Any deviation (different `est_time`, non-empty `labels`, extra kwargs, positional args) leaves the call in place as an explicit override.
-- Only removes the import when no remaining `register_cpu_ci` / `register_cuda_ci` symbol reference survives in the file.
+Two shapes count as the semantic default:
+
+1. The full 3-kwarg form `register_cpu_ci(est_time=10, suite="stage-a-cpu", labels=[])`.
+2. The 2-kwarg form `register_cpu_ci(est_time=10, suite="stage-a-cpu")` that
+   omits `labels=` entirely. Per `register_cpu_ci`'s signature, an omitted
+   `labels` defaults to `None`, which `_extract_list_constant` treats as `[]`
+   -- so this is semantically identical to shape 1.
+
+The script is intentionally conservative for everything else:
+- Any deviation in `est_time` / `suite` values, any positional args, any
+  extra kwargs (`nightly`, `disabled`), any non-empty `labels`, or an
+  explicit `labels=None` literal (ambiguous spelling -- author may have
+  intended to make the always-run intent explicit) leaves the call in
+  place as an explicit override.
+- Only removes the import when no remaining `register_cpu_ci` /
+  `register_cuda_ci` symbol reference survives in the file.
 - Only touches files under `tests/fast/`; other subtrees are off-limits.
 
 Run from repo root: `python scripts/tools/strip_default_cpu_register.py`.
@@ -29,21 +42,29 @@ DEFAULT_SUITE = "stage-a-cpu"
 
 
 def _is_default_form_register_cpu_ci(call: ast.Call) -> bool:
-    """True iff this Call is exactly `register_cpu_ci(est_time=10, suite="stage-a-cpu", labels=[])`.
+    """True iff this Call is a semantic-default `register_cpu_ci`.
 
-    Any positional args, missing kwargs, deviating values, or extra kwargs
-    disqualify the call.
+    Two shapes count as semantic default and are accepted here:
+
+    1. Full 3-kwarg form: ``register_cpu_ci(est_time=10, suite="stage-a-cpu", labels=[])``.
+    2. Omitted-``labels`` 2-kwarg form: ``register_cpu_ci(est_time=10, suite="stage-a-cpu")``.
+       Per `register_cpu_ci`'s signature, an omitted ``labels`` defaults to
+       ``None``, which `_extract_list_constant` treats as ``[]`` -- so this is
+       semantically identical to shape 1.
+
+    Any positional args, deviating values, extra kwargs (`nightly`,
+    `disabled`), non-empty `labels`, or an explicit `labels=None` literal
+    (ambiguous spelling -- conservatively keep) disqualify the call.
     """
     if not isinstance(call.func, ast.Name) or call.func.id != "register_cpu_ci":
         return False
     if call.args:
         return False
-    expected_keywords = {"est_time", "suite", "labels"}
-    if {kw.arg for kw in call.keywords} != expected_keywords:
+    kwarg_names = {kw.arg for kw in call.keywords}
+    accepted_kwarg_sets = ({"est_time", "suite", "labels"}, {"est_time", "suite"})
+    if kwarg_names not in accepted_kwarg_sets:
         return False
     for kw in call.keywords:
-        if not isinstance(kw.value, (ast.Constant, ast.List)):
-            return False
         if kw.arg == "est_time":
             if not isinstance(kw.value, ast.Constant) or kw.value.value != DEFAULT_EST_TIME:
                 return False
@@ -51,8 +72,13 @@ def _is_default_form_register_cpu_ci(call: ast.Call) -> bool:
             if not isinstance(kw.value, ast.Constant) or kw.value.value != DEFAULT_SUITE:
                 return False
         elif kw.arg == "labels":
+            # Only the literal empty-list spelling counts; `labels=None` is
+            # ambiguous (author may want to make always-run intent explicit)
+            # and is deliberately rejected.
             if not isinstance(kw.value, ast.List) or kw.value.elts:
                 return False
+        else:
+            return False
     return True
 
 
