@@ -13,6 +13,7 @@ from tests.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=10, suite="stage-a-cpu", labels=[])
 
 import argparse
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -23,14 +24,35 @@ from unittest.mock import MagicMock, patch
 import torch
 
 
+def _ensure_parent_module(dotted: str) -> ModuleType | None:
+    if not dotted:
+        return None
+    if dotted in sys.modules:
+        return sys.modules[dotted]
+    try:
+        return importlib.import_module(dotted)
+    except ImportError:
+        parent_name, _, child_name = dotted.rpartition(".")
+        parent = _ensure_parent_module(parent_name)
+        mod = ModuleType(dotted)
+        mod.__path__ = []
+        sys.modules[dotted] = mod
+        if parent is not None:
+            setattr(parent, child_name, mod)
+        return mod
+
+
 def _ensure_module(dotted: str) -> ModuleType:
-    """Ensure *dotted* exists in sys.modules, creating stubs for any missing segments."""
-    parts = dotted.split(".")
-    for i in range(len(parts)):
-        partial = ".".join(parts[: i + 1])
-        if partial not in sys.modules:
-            sys.modules[partial] = ModuleType(partial)
-    return sys.modules[dotted]
+    """Ensure *dotted* exists in sys.modules without replacing importable parents."""
+    if dotted in sys.modules:
+        return sys.modules[dotted]
+    parent_name, _, child_name = dotted.rpartition(".")
+    parent = _ensure_parent_module(parent_name)
+    mod = ModuleType(dotted)
+    sys.modules[dotted] = mod
+    if parent is not None:
+        setattr(parent, child_name, mod)
+    return mod
 
 
 # Stub modules whose top-level imports in main.py would fail.
