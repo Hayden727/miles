@@ -1,4 +1,4 @@
-def strip_param_name_prefix(name):
+def strip_param_name_prefix(name: str | None) -> str | None:
     if name is None:
         return None
     prefix = "module."
