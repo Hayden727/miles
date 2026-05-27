@@ -24,6 +24,20 @@ from tests.ci.ci_register import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _run_from_tmp_repo_root(tmp_path, monkeypatch):
+    """Run every test with cwd at a throwaway tmp_path "repo root".
+
+    The collect_tests helpers below write fixture files under
+    tmp_path/tests/fast/... and hand collect_tests the repo-relative path
+    (tests/fast/...), exactly as run_suite.py does from the repo root in CI.
+    Anchoring cwd here lets both ut_parse_one_file's open() and the
+    tests/fast/ prefix check resolve against the same root. Tests that read
+    files by absolute path or by __file__ (the AC-9 tree scan) are unaffected.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 def _make_fixture(body: str, tmp_path: Path, name: str = "fixture.py") -> str:
     p = tmp_path / name
     p.write_text(textwrap.dedent(body).lstrip("\n"))
@@ -248,18 +262,22 @@ class TestExtractionHelpers:
             _extract_list_constant(node)
 
 
-# --- _is_implicit_fast_cpu_path: segment-aware path discrimination -----------
+# --- _is_implicit_fast_cpu_path: prefix-anchored path discrimination ---------
 
 
 class TestIsImplicitFastCpuPath:
     def test_relative_tests_fast_path(self):
         assert _is_implicit_fast_cpu_path("tests/fast/test_x.py")
 
-    def test_dot_prefixed_path(self):
-        assert _is_implicit_fast_cpu_path("./tests/fast/test_x.py")
+    def test_dot_prefixed_path_not_recognized(self):
+        # Inputs are the bare repo-relative paths glob.glob yields
+        # (tests/fast/...); a ./-prefixed form is out of contract.
+        assert not _is_implicit_fast_cpu_path("./tests/fast/test_x.py")
 
-    def test_absolute_path(self):
-        assert _is_implicit_fast_cpu_path("/abs/repo/tests/fast/test_x.py")
+    def test_absolute_path_not_recognized(self):
+        # Classification is on the repo-relative path; absolute paths are not
+        # recognized (open(filename) would already require cwd == repo root).
+        assert not _is_implicit_fast_cpu_path("/abs/repo/tests/fast/test_x.py")
 
     def test_nested_subdir(self):
         assert _is_implicit_fast_cpu_path("tests/fast/sub/dir/test_x.py")
@@ -317,30 +335,26 @@ class TestFileTextMentionsRegister:
 # --- collect_tests: implicit synthesis, suspicious guard, cuda ban -----------
 
 
-def _make_under_tests_fast(tmp_path: Path, rel_path: str, body: str) -> str:
-    """Create a file under tmp_path/tests/fast/<rel_path> and return its path.
-
-    The synthetic prefix lets `_is_implicit_fast_cpu_path` recognize the
-    file as living under tests/fast/ via segment-aware Path matching.
-    """
-    target = tmp_path / "tests" / "fast" / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(textwrap.dedent(body).lstrip("\n"))
-    return str(target)
-
-
-def _make_under_tests_fast_gpu(tmp_path: Path, rel_path: str, body: str) -> str:
-    target = tmp_path / "tests" / "fast-gpu" / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(textwrap.dedent(body).lstrip("\n"))
-    return str(target)
-
-
 def _make_under(tmp_path: Path, subtree: str, rel_path: str, body: str) -> str:
+    """Create a file under tmp_path/<subtree>/<rel_path> and return the
+    repo-relative path (<subtree>/<rel_path>).
+
+    The file lives under tmp_path (the autouse-fixture cwd), but collect_tests
+    is handed the repo-relative path so both its open() and its tests/fast/
+    prefix check resolve the same way they do in CI.
+    """
     target = tmp_path / subtree / rel_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(textwrap.dedent(body).lstrip("\n"))
-    return str(target)
+    return f"{subtree}/{rel_path}"
+
+
+def _make_under_tests_fast(tmp_path: Path, rel_path: str, body: str) -> str:
+    return _make_under(tmp_path, "tests/fast", rel_path, body)
+
+
+def _make_under_tests_fast_gpu(tmp_path: Path, rel_path: str, body: str) -> str:
+    return _make_under(tmp_path, "tests/fast-gpu", rel_path, body)
 
 
 class TestCollectTestsImplicitFallback:

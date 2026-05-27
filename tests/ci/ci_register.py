@@ -2,7 +2,6 @@ import ast
 import warnings
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from pathlib import Path
 
 from tests.ci.labels import KNOWN_LABELS
 
@@ -233,22 +232,17 @@ def ut_parse_one_file(filename: str) -> list[CIRegistry]:
 
 
 def _is_implicit_fast_cpu_path(filename: str) -> bool:
-    """True when `filename` is a file under the tests/fast/ subtree.
+    """True when `filename` is a repo-relative path under tests/fast/.
 
-    Segment-aware so the check is robust against same-prefix sibling
-    directories: tests/fast-gpu/, tests/fastish/, tests/fastfoo/ all return
-    False. Bare `tests/fast` (directory, no file segment after) also returns
-    False -- the helper is meant for file paths, not directory paths.
-
-    Accepts relative paths (tests/fast/x.py), `./`-prefixed paths, and
-    absolute paths whose path components contain a contiguous ("tests",
-    "fast") segment pair followed by at least one more segment.
+    collect_tests only ever sees the repo-relative paths run_suite.py gets
+    from glob.glob("tests/fast/**/*.py"), so the prefix is anchored at the
+    start of the string; the trailing slash keeps same-prefix siblings
+    (tests/fast-gpu/, tests/fastish/) and the bare tests/fast directory out.
+    Absolute or ./-prefixed paths are intentionally not recognized: this
+    check leans on the same repo-root cwd that ut_parse_one_file's
+    open(filename) already requires to read the file at all.
     """
-    parts = Path(filename).parts
-    for i in range(len(parts) - 2):
-        if parts[i] == "tests" and parts[i + 1] == "fast":
-            return True
-    return False
+    return filename.startswith("tests/fast/")
 
 
 def _file_text_mentions_register(filename: str) -> bool:
