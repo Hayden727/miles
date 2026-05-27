@@ -7,7 +7,11 @@ def get_deepscaler_rule_based_reward(response, label):
     elif "###Response" in response:
         model_solution = response.split("###Response")[1]
     else:
-        return 0
+        # Models that do not emit </think>/###Response markers (e.g. Gemma-4,
+        # which wraps reasoning in <|channel>thought ... <channel|> tags) would
+        # otherwise score 0 even on correct answers. Fall back to the whole
+        # response so the trailing \boxed{} answer is still extracted.
+        model_solution = response
 
     model_answer = extract_answer(model_solution)
     if model_answer is None:
