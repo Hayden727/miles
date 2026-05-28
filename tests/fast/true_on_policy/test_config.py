@@ -12,6 +12,9 @@ from miles.true_on_policy import (
     get_true_on_policy_contract,
     get_true_on_policy_model_profile,
 )
+from tests.ci.ci_register import register_cpu_ci
+
+register_cpu_ci(est_time=10, suite="stage-a-cpu")
 
 
 def _args(**overrides):

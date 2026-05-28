@@ -6,6 +6,9 @@ import torch
 from miles.backends.training_utils import cp_utils
 from miles.backends.training_utils import data as data_utils
 from miles.backends.training_utils import log_utils
+from tests.ci.ci_register import register_cpu_ci
+
+register_cpu_ci(est_time=10, suite="stage-a-cpu")
 
 
 def test_true_on_policy_rollout_logprob_dtype_follows_training_precision():

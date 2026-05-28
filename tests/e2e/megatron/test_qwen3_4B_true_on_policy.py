@@ -14,7 +14,8 @@ def _clear_proxy_env():
 
 
 def _build_args() -> ScriptArgs:
-    run_id = os.environ.get("GITHUB_COMMIT_NAME") or f"qwen3-dense-top-tp2-cp4-ci-{U.create_run_id()}"
+    commit_name = os.environ.get("GITHUB_COMMIT_NAME")
+    run_id = f"{commit_name}-tp2-cp4" if commit_name else f"qwen3-dense-top-tp2-cp4-ci-{U.create_run_id()}"
     args = ScriptArgs(
         mode="debug_one_sample",
         run_id=run_id,
