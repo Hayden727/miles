@@ -1,11 +1,11 @@
 import torch
+from tests.ci.ci_register import register_cpu_ci
 
 from miles.backends.training_utils.loss_hub.math_utils import (
     _calculate_log_probs_and_entropy_true_on_policy,
     _prepare_true_on_policy_full_logits,
     _split_replicated_loss_gather_grad,
 )
-from tests.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="stage-a-cpu")
 

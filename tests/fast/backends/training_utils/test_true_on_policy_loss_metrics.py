@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from tests.ci.ci_register import register_cpu_ci
 
 from miles.backends.training_utils.loss_hub import losses as loss_utils
-from tests.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="stage-a-cpu")
 

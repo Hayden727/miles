@@ -99,7 +99,7 @@ def get_rollout_data(args: Namespace, rollout_data_ref: Box) -> RolloutBatch:
 
 
 def get_batch(
-    data_iterator: "DataIterator",
+    data_iterator: DataIterator,
     keys: Sequence[str],
     pad_multiplier: int = 128,
     qkv_format: str = "thd",
@@ -332,7 +332,7 @@ class DataIterator:
             self.offset += self.micro_batch_size
         return batch
 
-    def reset(self) -> "DataIterator":
+    def reset(self) -> DataIterator:
         """Reset internal offset to the start and return self."""
         self.offset = 0
         return self
