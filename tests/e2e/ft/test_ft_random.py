@@ -14,8 +14,10 @@ import requests
 logger = logging.getLogger(__name__)
 
 _MILES_ROOT: Path = Path(__file__).resolve().parents[3]
-if str(_MILES_ROOT) not in sys.path:
-    sys.path.insert(0, str(_MILES_ROOT))
+_miles_root_str = str(_MILES_ROOT)
+if _miles_root_str in sys.path:
+    sys.path.remove(_miles_root_str)
+sys.path.insert(0, _miles_root_str)
 
 import typer
 from tests.e2e.ft.conftest_ft.app import resolve_dump_dir

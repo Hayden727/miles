@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 import ray
 
@@ -239,13 +237,11 @@ class TestAsyncInit:
 
 
 class TestPrepareIndepDPModeAlive:
-    def test_reconfigure_and_update_info(self):
+    async def test_reconfigure_and_update_info(self):
         cell = make_alive_cell(0, alive_cell_indices=[0, 1, 2])
 
         new_info = make_indep_dp_info(alive_cell_indices=[0, 2], quorum_id=2)
-        asyncio.get_event_loop().run_until_complete(
-            cell.prepare_indep_dp_mode_alive(indep_dp_info=new_info, send_ckpt_dst_ranks=[])
-        )
+        await cell.prepare_indep_dp_mode_alive(indep_dp_info=new_info, send_ckpt_dst_ranks=[])
 
         assert cell.indep_dp_info == new_info
         assert cell.is_alive
@@ -256,13 +252,11 @@ class TestPrepareIndepDPModeAlive:
             assert len(reconfig_calls) == 1
             assert reconfig_calls[0][2]["indep_dp_info"] == new_info
 
-    def test_sends_ckpt_to_correct_dst_ranks(self):
+    async def test_sends_ckpt_to_correct_dst_ranks(self):
         cell = make_alive_cell(0, alive_cell_indices=[0, 1, 2])
 
         new_info = make_indep_dp_info(alive_cell_indices=[0, 1, 2], quorum_id=2)
-        asyncio.get_event_loop().run_until_complete(
-            cell.prepare_indep_dp_mode_alive(indep_dp_info=new_info, send_ckpt_dst_ranks=[1, 2])
-        )
+        await cell.prepare_indep_dp_mode_alive(indep_dp_info=new_info, send_ckpt_dst_ranks=[1, 2])
 
         handle = cell._get_actor_handles()[0]
         calls = ray.get(handle.get_calls.remote())
@@ -273,13 +267,11 @@ class TestPrepareIndepDPModeAlive:
 
 
 class TestPrepareIndepDPModeHealing:
-    def test_healing_inits_and_marks_alive(self):
+    async def test_healing_inits_and_marks_alive(self):
         cell = make_cell(actor_count=1)
         info = make_indep_dp_info()
 
-        asyncio.get_event_loop().run_until_complete(
-            cell.prepare_indep_dp_mode_healing(indep_dp_info=info, recv_ckpt_src_rank=None)
-        )
+        await cell.prepare_indep_dp_mode_healing(indep_dp_info=info, recv_ckpt_src_rank=None)
 
         assert cell.is_alive
         assert cell.indep_dp_info == info
