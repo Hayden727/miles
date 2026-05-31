@@ -164,10 +164,9 @@ class RolloutServer:
     def num_new_engines(self):
         return sum(g.num_new_engines for g in self.server_groups)
 
-    @num_new_engines.setter
-    def num_new_engines(self, value):
+    def clear_num_new_engines(self):
         for g in self.server_groups:
-            g.num_new_engines = value
+            g.num_new_engines = 0
 
     @property
     def engine_gpu_counts(self) -> list[int]:

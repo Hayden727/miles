@@ -201,7 +201,7 @@ class RolloutManager:
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
         srv = self._get_updatable_server()
         if srv:
-            srv.num_new_engines = 0
+            srv.clear_num_new_engines()
 
     def recover_updatable_engines(self) -> None:
         """Restart any dead rollout engines and update num_new_engines for update_weights detection.
