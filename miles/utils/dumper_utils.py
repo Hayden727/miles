@@ -147,23 +147,8 @@ class DumperMegatronUtil:
 def _build_full_grad_getter(
     model_chunk: torch.nn.Module,
 ) -> Callable[[torch.nn.Parameter], torch.Tensor | None]:
-    """Return a ``get_grad(param)`` that yields the full DP-reduced gradient.
-
-    With the distributed optimizer, Megatron reduce-scatters gradients over the
-    dp_cp group, so each rank's ``main_grad`` holds the reduced gradient only on
-    its own 1/dp_cp shard (stale local partials elsewhere). That raw per-rank
-    buffer is not comparable across DP topologies (a non-FT baseline shards over
-    dp×cp while an indep-DP target shards over a cell's cp then sums across
-    cells).
-
-    We all-gather each bucket's grad shards into a FRESH buffer — Megatron's own
-    ``grad_data`` is only read, never mutated — and return per-param views into
-    it, so the dumped gradient is the full global gradient the optimizer steps
-    with (identical across topologies, since the post-step weights are
-    bit-identical). The all-gathers run here, before the per-param dump loop, on
-    all dp_cp ranks, so the collective is symmetric regardless of which rank
-    writes files.
-    """
+    """Build get_grad(param): all-gather distributed-optimizer grad shards into a
+    fresh buffer (grad_data is read, not mutated) and return per-param views."""
     grad_map: dict[torch.nn.Parameter, torch.Tensor] = {}
     bucket_groups = list(getattr(model_chunk, "bucket_groups", [])) + list(
         getattr(model_chunk, "expert_parallel_bucket_groups", [])
