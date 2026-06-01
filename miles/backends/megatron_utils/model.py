@@ -515,8 +515,11 @@ def train_one_step(
         check_mtp_only_grad(model, step_id)
 
     # Dump backward tensors while gradients are still attached. The optimizer
-    # step and subsequent zero_grad release them.
-    dumper_phase_util.finalize(model)
+    # step and subsequent zero_grad release them. Gate on a NORMAL outcome so
+    # discarded (retry) steps emit no dump files, keeping baseline/target dump
+    # counts matched in the deterministic test.
+    if outcome == TrainStepOutcome.NORMAL:
+        dumper_phase_util.finalize(model)
 
     if not disable_optimizer and valid_step:
         # Update parameters.
@@ -533,7 +536,6 @@ def train_one_step(
         optimizer.zero_grad()
 
     if outcome == TrainStepOutcome.NORMAL:
-        dumper_phase_util.finalize(model)
         dump_local_weight_checksums(args=args, model=model, optimizer=optimizer)
         if args.enable_witness:
             witness_dump_and_clear_stale(model=model, witness_info=witness_info, optimizer=optimizer)
