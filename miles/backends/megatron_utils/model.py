@@ -515,9 +515,7 @@ def train_one_step(
         check_mtp_only_grad(model, step_id)
 
     # Dump backward tensors while gradients are still attached. The optimizer
-    # step and subsequent zero_grad release them. Gate on a NORMAL outcome so
-    # discarded (retry) steps emit no dump files, keeping baseline/target dump
-    # counts matched in the deterministic test.
+    # step and subsequent zero_grad release them.
     if outcome == TrainStepOutcome.NORMAL:
         dumper_phase_util.finalize(model)
 
