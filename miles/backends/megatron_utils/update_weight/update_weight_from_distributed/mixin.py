@@ -57,12 +57,7 @@ class DistBucketedWeightUpdateMixin:
         converted_named_tensors: list[tuple[str, torch.Tensor]] = []
 
         for update_unit in self._get_weight_transfer_update_units(is_expert=False):
-            gathered_params = []
-            unit_size = 0
-            for name, param in update_unit:
-                param = all_gather_param(self.args, name, param)
-                gathered_params.append((name, param))
-                unit_size += param.numel() * param.element_size()
+            gathered_params, unit_size = self._all_gather_update_unit(update_unit)
 
             if not self._is_source:
                 continue
@@ -94,12 +89,7 @@ class DistBucketedWeightUpdateMixin:
         named_tensors: list[tuple[str, torch.Tensor]] = []
 
         for update_unit in self._get_weight_transfer_update_units(is_expert=True):
-            gathered_params = []
-            unit_size = 0
-            for name, param in update_unit:
-                param = all_gather_param(self.args, name, param)
-                gathered_params.append((name, param))
-                unit_size += param.numel() * param.element_size()
+            gathered_params, unit_size = self._all_gather_update_unit(update_unit)
 
             if (
                 buffer_size + unit_size
@@ -113,6 +103,17 @@ class DistBucketedWeightUpdateMixin:
 
         if named_tensors:
             self._update_expert_bucket_weights(named_tensors, update_bucket_weight_func, pbar)
+
+    def _all_gather_update_unit(
+        self, update_unit: list[tuple[str, torch.Tensor]]
+    ) -> tuple[list[tuple[str, torch.Tensor]], int]:
+        gathered_params = []
+        unit_size = 0
+        for name, param in update_unit:
+            param = all_gather_param(self.args, name, param)
+            gathered_params.append((name, param))
+            unit_size += param.numel() * param.element_size()
+        return gathered_params, unit_size
 
     def _get_weight_transfer_update_units(self, is_expert: bool) -> list[list[tuple[str, torch.Tensor]]]:
         named_tensors = list(collect_named_tensors_for_weight_transfer(self.args, self.model, is_expert=None))
