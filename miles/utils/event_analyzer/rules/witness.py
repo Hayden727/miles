@@ -1,13 +1,12 @@
 import logging
 from collections import defaultdict
 from collections.abc import Iterator
-from typing import NamedTuple
 
 from miles.backends.megatron_utils.types import TrainStepOutcome
 from miles.utils.event_logger.models import (
     Event,
-    TrainGroupStepEndEvent,
     TrainAdvantageComputationEvent,
+    TrainGroupStepEndEvent,
     WitnessAllocateIdEvent,
     WitnessSnapshotParamEvent,
 )
@@ -59,7 +58,7 @@ def check(events: list[Event]) -> list[WitnessIssue]:
             expected_witness_ids_of_step=_compute_expected_witness_ids_of_step(
                 _filter_by_type(events, WitnessAllocateIdEvent)
             ),
-            zero_adv_witness_ids_by_key=_compute_zero_advantage_witness_ids(
+            zero_adv_witness_ids_by_rollout=_compute_zero_advantage_witness_ids(
                 _filter_by_type(events, TrainAdvantageComputationEvent)
             ),
         )
@@ -70,22 +69,28 @@ def _filter_by_type(arr: list, ty: type) -> list:
     return [x for x in arr if isinstance(x, ty)]
 
 
-class _RolloutCellKey(NamedTuple):
-    rollout_id: int
-    cell_index: int
-
-
 def _compute_zero_advantage_witness_ids(
     events: list[TrainAdvantageComputationEvent],
-) -> dict[_RolloutCellKey, set[int]]:
-    """Return witness_ids where all per-token advantages == 0.0, keyed by (rollout_id, cell_index)."""
-    result: dict[_RolloutCellKey, set[int]] = defaultdict(set)
+) -> dict[int, set[int]]:
+    """Return witness_ids where all per-token advantages == 0.0, keyed by rollout_id.
+
+    Unioned across cells on purpose. Each witness/sample is owned by exactly one
+    cell (data-parallel split), so a cell only computes advantages for its own
+    shard. But the WitnessSnapshotParamEvent is taken on the per-cell weight,
+    which under indep_dp reflects the GLOBAL gradient (summed across cells). A
+    zero-advantage sample contributes nothing to that global gradient, so its
+    witness is absent from EVERY cell's weight — including cells that never
+    computed its advantage. Filtering per (rollout_id, cell_index) would leave a
+    cell unable to excuse the zero-advantage witnesses owned by its peers,
+    producing false WitnessDataMismatch issues (e.g. a GRPO group whose 8 samples
+    all share one reward, split even/odd across two cells).
+    """
+    result: dict[int, set[int]] = defaultdict(set)
 
     for event in events:
-        key = _RolloutCellKey(event.rollout_id, event.source.cell_index)
         for adv_tokens, wid_tokens in zip(event.advantages, event.witness_ids, strict=True):
             if all(v == 0.0 for v in adv_tokens):
-                result[key].add(wid_tokens[0])
+                result[event.rollout_id].add(wid_tokens[0])
 
     return dict(result)
 
@@ -113,7 +118,7 @@ def _find_mismatches(
     all_step_events: list[TrainGroupStepEndEvent],
     all_witness_events: list[WitnessSnapshotParamEvent],
     expected_witness_ids_of_step: dict[int, set[int]],
-    zero_adv_witness_ids_by_key: dict[tuple[int, int], set[int]],
+    zero_adv_witness_ids_by_rollout: dict[int, set[int]],
 ) -> Iterator[WitnessIssue]:
     for step_event in all_step_events:
         rollout_id = step_event.rollout_id
@@ -141,7 +146,7 @@ def _find_mismatches(
                 )
                 continue
 
-            zero_adv_ids = zero_adv_witness_ids_by_key.get(_RolloutCellKey(rollout_id, cell_index), set())
+            zero_adv_ids = zero_adv_witness_ids_by_rollout.get(rollout_id, set())
 
             for event in witness_events_of_cell:
                 issue = _compare_snapshot(
