@@ -400,6 +400,21 @@ class TestDeepSeekV32TITOAlignWithSGLang:
         actual = tito.render_messages(messages, add_generation_prompt=True, tools=self._TOOLS, tokenize=True)
         assert actual == expected
 
+    def test_absent_enable_thinking_defaults_to_thinking(self):
+        # With the translation now living in the encoder, an absent enable_thinking
+        # renders in thinking mode (the encoder default), matching sglang thinking=True.
+        tokenizer = _get_deepseek_v32_tokenizer()
+        messages = [{"role": "user", "content": "What is the weather in Paris?"}]
+
+        expected = sglang_dsv32_prompt_ids(tokenizer, messages, self._TOOLS, thinking=True)
+        tito = get_tito_tokenizer(
+            tokenizer,
+            tokenizer_type=TITOTokenizerType.DEEPSEEKV32,
+            chat_template_kwargs={},
+        )
+        actual = tito.render_messages(messages, add_generation_prompt=True, tools=self._TOOLS, tokenize=True)
+        assert actual == expected
+
     @pytest.mark.parametrize("thinking", [False, True], ids=["chat", "thinking"])
     def test_prompt_ids_match_sglang_dsv32_with_tool_history(self, thinking):
         tokenizer = _get_deepseek_v32_tokenizer()

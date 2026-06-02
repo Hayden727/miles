@@ -764,35 +764,6 @@ class DeepSeekV32TITOTokenizer(TITOTokenizer):
             allowed_append_roles=allowed_append_roles,
         )
 
-    def render_messages(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        add_generation_prompt: bool,
-        tools: list[dict[str, Any]] | None = None,
-        tokenize: bool = False,
-    ) -> str | list[int]:
-        """Render through the V3.2 bridge, translating miles' ``enable_thinking``
-        knob into the encoder's ``thinking_mode``.
-
-        Tool defs and the empty-system anchor are handled downstream by
-        ``deepseek_v32.render_messages`` (sglang-aligned), so ``tools`` is just
-        forwarded.  ``add_generation_prompt`` is forwarded but is a no-op on this
-        path: the encoder always emits the next-turn opener as part of the last
-        message, so there is no separate generation-prompt suffix to add or strip.
-        """
-        encode_kwargs = dict(self.chat_template_kwargs)
-        enable_thinking = encode_kwargs.pop("enable_thinking", False)
-        encode_kwargs.setdefault("thinking_mode", "thinking" if enable_thinking else "chat")
-        return apply_chat_template(
-            messages,
-            tokenizer=self.tokenizer,
-            tokenize=tokenize,
-            add_generation_prompt=add_generation_prompt,
-            tools=tools,
-            **encode_kwargs,
-        )
-
 
 # ---------------------------------------------------------------------------
 # Enum + Factory
