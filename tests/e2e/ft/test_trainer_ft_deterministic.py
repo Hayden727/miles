@@ -82,19 +82,26 @@ def _build_target_args(mode: FTTestMode, dump_dir: str, enable_dumper: bool = Tr
 
 
 def _compare(dump_dir: str, mode: FTTestMode) -> None:
-    rtol: float = 3e-2 if mode.has_real_rollout else 1e-2
-    atol: float = 2e-8 if mode.has_real_rollout else 1e-8
+    # See test_trainer_ft_with_failure._compare: real-rollout grads carry
+    # real-magnitude reduction/split-order noise under recovery while weights are
+    # bitwise-identical, so trust the strict param match (+ value) and exclude
+    # grad-derived comparisons there. Debug modes stay bitwise-strict on grads.
+    real_rollout = mode.has_real_rollout
+    rtol: float = 3e-2 if real_rollout else 1e-2
+    atol: float = 2e-8 if real_rollout else 1e-8
     compare_metrics(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
         rtol=rtol,
         atol=atol,
         key_prefixes=["train/"],
+        exclude_keys=["train/grad_norm"] if real_rollout else None,
     )
     compare_dumps(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
         abs_diff_threshold=_NEAR_ZERO_GRAD_ATOL,
+        allow_failed_grads=real_rollout,
     )
     print("Deterministic healing comparison test PASSED")
 
