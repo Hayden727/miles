@@ -132,6 +132,14 @@ def _build_bridge_subclass():
 
             if not os.environ.get("MILES_NEMOTRONH_KEEP_MTP"):
                 provider.mtp_num_layers = None
+                # Newer megatron.bridge MambaModelProvider.finalize() builds the MTP
+                # block from mtp_hybrid_override_pattern (and references
+                # Symbols.MTP_SEPARATOR, which does not exist in older Megatron-LM ->
+                # AttributeError). Nulling mtp_num_layers alone is not enough because
+                # finalize() gates the MTP path on mtp_hybrid_override_pattern, which
+                # the base NemotronHBridge populates from the HF config. Clear it too
+                # so finalize() skips MTP entirely when MTP is disabled.
+                provider.mtp_hybrid_override_pattern = None
             return provider
 
         def mapping_registry(self):
