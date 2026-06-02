@@ -34,7 +34,7 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
     grouped_names: set[str] = set()
     group_keys: set[str] = set()
     ordered_units: list[tuple[int, NamedUpdateUnit]] = []
-    pending_groups: dict[tuple[str, str], tuple[tuple[str, ...], list[str | None]]] = {}
+    pending_groups: dict[tuple[str, str], list[str | None]] = {}
     matched_group_keys: set[str] = set()
 
     for group in atomic_update_groups:
@@ -59,9 +59,7 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
 
         group, suffix_idx, suffix = matches[0]
         prefix = name[: -len(suffix)]
-        suffixes, names = pending_groups.setdefault(
-            (prefix, group.key), (group.suffixes, [None] * len(group.suffixes))
-        )
+        names = pending_groups.setdefault((prefix, group.key), [None] * len(group.suffixes))
         assert names[suffix_idx] is None, f"Atomic update group {prefix}:{group.key} has duplicate suffix {suffix}"
         names[suffix_idx] = name
         grouped_names.add(name)
@@ -72,10 +70,9 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
             group.key in matched_group_keys
         ), f"Atomic update group {group.key} references no params matching suffixes {group.suffixes}"
 
-    for (prefix, key), (suffixes, names) in pending_groups.items():
-        missing_suffixes = tuple(suffix for suffix, name in zip(suffixes, names, strict=True) if name is None)
-        assert not missing_suffixes, f"Atomic update group {prefix}:{key} missing suffixes {missing_suffixes}"
-        resolved_names = tuple(name for name in names if name is not None)
+    for (prefix, key), names in pending_groups.items():
+        assert all(names), f"Atomic update group {prefix}:{key} is incomplete: {names}"
+        resolved_names = tuple(names)
         ordered_units.append((min(position[name] for name in resolved_names), NamedUpdateUnit(names=resolved_names)))
 
     for name in param_names:
