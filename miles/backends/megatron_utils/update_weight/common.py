@@ -60,7 +60,6 @@ def get_named_update_units(param_names: Sequence[str], atomic_update_groups) -> 
         group, suffix_idx, suffix = matches[0]
         prefix = name[: -len(suffix)]
         names = pending_groups.setdefault((prefix, group.key), [None] * len(group.suffixes))
-        assert names[suffix_idx] is None, f"Atomic update group {prefix}:{group.key} has duplicate suffix {suffix}"
         names[suffix_idx] = name
         grouped_names.add(name)
         matched_group_keys.add(group.key)
