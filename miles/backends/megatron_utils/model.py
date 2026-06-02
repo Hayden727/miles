@@ -633,6 +633,9 @@ def train(
 
             mtp_loss_scale = 1 / num_microbatches[step_id]
             tracker = MTPLossLoggingHelper.tracker
+            # nemotron_h (Mamba hybrid) MTP routes its loss through a different
+            # path and may not populate the tracker, leaving mtp_losses unbound.
+            mtp_losses = None
             if "values" in tracker:
                 values = tracker["values"]
                 if tracker.get("reduce_group") is not None:
@@ -656,7 +659,7 @@ def train(
             role_tag = "" if role == "actor" else f"{role}-"
 
             extra_metrics = {}
-            if args.enable_mtp_training:
+            if args.enable_mtp_training and mtp_losses is not None:
                 extra_metrics["mtp_loss"] = mtp_losses
 
             if not disable_optimizer:

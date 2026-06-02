@@ -202,7 +202,10 @@ def _install_mamba_model_loss_mask_shim() -> None:
 
     _orig_forward = MambaModel.forward
 
-    def forward(self, *args, loss_mask=None, **kwargs):
+    def forward(self, *args, loss_mask=None, mtp_kwargs=None, **kwargs):
+        # The MTP-enabled MambaModel.forward computes MTP loss from ``labels``
+        # directly and does not accept miles' GPT-style ``mtp_kwargs``; drop it
+        # (and ``loss_mask``, which miles computes downstream).
         return _orig_forward(self, *args, **kwargs)
 
     MambaModel.forward = forward
