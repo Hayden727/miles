@@ -45,7 +45,19 @@ _NEAR_ZERO_GRAD_ATOL: float = 1e-3
 
 def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enable_dumper: bool = True) -> str:
     is_phase_a: bool = dump_dir.endswith("phase_a")
-    base = get_common_train_args(mode, dump_dir=dump_dir, num_steps=NUM_PHASE_B_STEPS, enable_dumper=enable_dumper)
+    # Real-rollout target replays baseline's generated data: live generation is
+    # chaotic under the FP noise of healing, so regenerating on both sides makes
+    # the comparison ill-posed. Baseline still generates live.
+    replay_rollout_from = (
+        dump_dir.replace("/target/", "/baseline/") if (is_target and mode.has_real_rollout) else None
+    )
+    base = get_common_train_args(
+        mode,
+        dump_dir=dump_dir,
+        num_steps=NUM_PHASE_B_STEPS,
+        enable_dumper=enable_dumper,
+        replay_rollout_from=replay_rollout_from,
+    )
     base += "--deterministic-mode " + _DETERMINISTIC_ENV_VARS
 
     if is_target:

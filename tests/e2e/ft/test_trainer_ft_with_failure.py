@@ -48,7 +48,20 @@ _WITH_FAILURE_ACTIONS: list[dict] = [
 
 def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enable_dumper: bool = True) -> str:
     is_phase_a: bool = dump_dir.endswith("phase_a")
-    base = get_common_train_args(mode, dump_dir=dump_dir, num_steps=NUM_PHASE_B_STEPS, enable_dumper=enable_dumper)
+    # For real-rollout modes the target replays the baseline's generated rollout
+    # data (see get_common_train_args): live generation is chaotic under the FP
+    # noise of recovery, so regenerating on both sides makes the comparison
+    # ill-posed. Baseline still generates live; target trains on identical data.
+    replay_rollout_from = (
+        dump_dir.replace("/target/", "/baseline/") if (is_target and mode.has_real_rollout) else None
+    )
+    base = get_common_train_args(
+        mode,
+        dump_dir=dump_dir,
+        num_steps=NUM_PHASE_B_STEPS,
+        enable_dumper=enable_dumper,
+        replay_rollout_from=replay_rollout_from,
+    )
 
     if is_target:
         base += get_ft_args(mode)
