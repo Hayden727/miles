@@ -22,6 +22,51 @@ def resolve_dump_dir(test_name: str) -> str:
     return dump_dir
 
 
+def _dump_subdir(side: str, phase: str) -> str:
+    return f"{side}/{phase}" if phase else side
+
+
+def run_pipeline(
+    *,
+    test_name: str,
+    build_baseline_args: BuildArgsFn,
+    build_target_args: BuildArgsFn,
+    compare_fn: Callable[[str, FTTestMode], None],
+    phases: list[str] | None,
+    mode: str,
+    enable_dumper: bool = True,
+) -> None:
+    """Full pipeline (prepare + every phase's baseline/target + compare) for one mode.
+
+    A plain callable (not a typer command) so a CI entry file can run a single mode
+    via bare ``python3 <file>``. The typer ``run`` command delegates here too.
+    """
+    effective_phases: list[str] = phases or [""]
+    ft_mode: FTTestMode = resolve_mode(mode)
+    dump_dir: str = resolve_dump_dir(test_name)
+    print(f"Dump directory: {dump_dir}")
+
+    prepare(ft_mode)
+
+    for phase in effective_phases:
+        baseline_dump = f"{dump_dir}/{_dump_subdir('baseline', phase)}"
+        run_training(
+            train_args=build_baseline_args(ft_mode, baseline_dump, enable_dumper),
+            mode=ft_mode,
+            dump_dir=baseline_dump,
+        )
+
+        target_dump = f"{dump_dir}/{_dump_subdir('target', phase)}"
+        run_training(
+            train_args=build_target_args(ft_mode, target_dump, enable_dumper),
+            mode=ft_mode,
+            dump_dir=target_dump,
+        )
+
+    if enable_dumper:
+        compare_fn(dump_dir, ft_mode)
+
+
 def create_comparison_app(
     *,
     test_name: str,
@@ -36,12 +81,6 @@ def create_comparison_app(
     For multi-phase tests (e.g. with_failure), provide phase names like ["phase_a", "phase_b"].
     """
     app: typer.Typer = typer.Typer()
-    effective_phases: list[str] = phases or [""]
-
-    def _get_dump_subdir(side: str, phase: str) -> str:
-        if phase:
-            return f"{side}/{phase}"
-        return side
 
     def _run_side(
         side: str,
@@ -55,7 +94,7 @@ def create_comparison_app(
         ft_mode = resolve_mode(mode)
         if dump_dir is None:
             dump_dir = resolve_dump_dir(test_name)
-        sub = _get_dump_subdir(side, phase)
+        sub = _dump_subdir(side, phase)
         full_dump_dir = f"{dump_dir}/{sub}"
         args = build_fn(ft_mode, full_dump_dir, enable_dumper)
         prepare(ft_mode)
@@ -96,26 +135,15 @@ def create_comparison_app(
         enable_dumper: Annotated[bool, typer.Option(help="Enable dumper output")] = True,
     ) -> None:
         """Full pipeline: prepare + all phases + compare."""
-        ft_mode = resolve_mode(mode)
-        dump_dir: str = resolve_dump_dir(test_name)
-        print(f"Dump directory: {dump_dir}")
-
-        prepare(ft_mode)
-
-        for phase in effective_phases:
-            sub_baseline = _get_dump_subdir("baseline", phase)
-            sub_target = _get_dump_subdir("target", phase)
-
-            baseline_dump = f"{dump_dir}/{sub_baseline}"
-            baseline_args = build_baseline_args(ft_mode, baseline_dump, enable_dumper)
-            run_training(train_args=baseline_args, mode=ft_mode, dump_dir=baseline_dump)
-
-            target_dump = f"{dump_dir}/{sub_target}"
-            target_args = build_target_args(ft_mode, target_dump, enable_dumper)
-            run_training(train_args=target_args, mode=ft_mode, dump_dir=target_dump)
-
-        if enable_dumper:
-            compare_fn(dump_dir, ft_mode)
+        run_pipeline(
+            test_name=test_name,
+            build_baseline_args=build_baseline_args,
+            build_target_args=build_target_args,
+            compare_fn=compare_fn,
+            phases=phases,
+            mode=mode,
+            enable_dumper=enable_dumper,
+        )
 
     @app.command()
     def generate_data(
