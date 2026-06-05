@@ -14,7 +14,7 @@ from torch.distributed.distributed_c10d import _coalescing_manager
 
 from miles.utils.det_process_group import (
     _CompletedWork,
-    _is_deterministic_op,
+    _fold_gathered_sum,
     _reduce_op_of,
     det_all_reduce,
     register_det_nccl_backend,
@@ -26,9 +26,7 @@ _SEED = 1234
 
 
 # --------------------------------------------------------------------------- #
-# CPU-only tests: no GPU, no distributed init. The deterministic fold and the
-# private dispatch helpers are pure and can be exercised with an injected
-# gather_fn closure.
+# CPU-only tests (no GPU, no distributed init)
 # --------------------------------------------------------------------------- #
 
 
@@ -61,14 +59,53 @@ def _pairwise_tree_fold(partials: list[torch.Tensor]) -> torch.Tensor:
     return running[0]
 
 
-def test_is_deterministic_op_reduceop_tuple_containment_footgun():
-    """Only SUM/AVG fold deterministically; guards the ReduceOp `in (...)` containment footgun."""
-    assert _is_deterministic_op(dist.ReduceOp.SUM) is True
-    assert _is_deterministic_op(dist.ReduceOp.AVG) is True
-    assert _is_deterministic_op(dist.ReduceOp.MAX) is False
-    assert _is_deterministic_op(dist.ReduceOp.MIN) is False
-    assert _is_deterministic_op(dist.ReduceOp.PRODUCT) is False
-    assert _is_deterministic_op(dist.ReduceOp.BAND) is False
+def test_reduceop_equality_vs_containment_footgun():
+    """Documents why dispatch uses explicit ==: an options ReduceOp equals SUM yet tuple containment is False."""
+    opts = dist.AllreduceOptions()
+    opts.reduceOp = dist.ReduceOp.SUM
+
+    assert opts.reduceOp == dist.ReduceOp.SUM
+    assert opts.reduceOp not in (dist.ReduceOp.SUM, dist.ReduceOp.AVG)
+
+
+@pytest.mark.parametrize(
+    "world_size,numel,dtype",
+    [
+        (1, 8, torch.float32),
+        (2, 8, torch.float32),
+        (3, 8, torch.float32),
+        (4, 8, torch.float32),
+        (5, 8, torch.float32),
+        (8, 64, torch.float32),
+        (16, 1, torch.float32),
+        (4, 8, torch.bfloat16),
+        (3, 8, torch.bfloat16),
+        (4, 8, torch.int64),
+    ],
+)
+def test_fold_gathered_sum(world_size: int, numel: int, dtype: torch.dtype):
+    """_fold_gathered_sum matches the reference order bitwise: pairwise tree for power-of-two, ascending otherwise."""
+    if dtype.is_floating_point:
+        parts = [
+            torch.randn(numel, generator=torch.Generator().manual_seed(_SEED + i)).to(dtype)
+            for i in range(world_size)
+        ]
+    else:
+        parts = [
+            torch.randint(-1000, 1000, (numel,), generator=torch.Generator().manual_seed(_SEED + i), dtype=dtype)
+            for i in range(world_size)
+        ]
+
+    if world_size & (world_size - 1) == 0:
+        expected = _pairwise_tree_fold([p.clone() for p in parts])
+    else:
+        expected = parts[0].clone()
+        for part in parts[1:]:
+            expected = expected + part
+
+    actual = _fold_gathered_sum([p.clone() for p in parts])
+
+    assert torch.equal(actual, expected)
 
 
 def test_reduce_op_of_extracts_reduceop_from_options_object():
@@ -228,8 +265,6 @@ def _check_reduce_scatter_vs_allreduce(rank: int, det1: dist.ProcessGroup, x, tr
     dist.reduce_scatter_tensor(shard_view, buf, op=dist.ReduceOp.SUM, group=det1)
     _assert_bitwise("aliased reduce_scatter_tensor", shard_view, expected_shard.view(shard_view.shape))
 
-    # List variant: rank r's output = sum over ranks of their r-th chunk
-    # (= the same slice of the full fold, since slicing commutes with elementwise sums).
     inputs = [chunk.contiguous() for chunk in x.clone().chunk(_WORLD_SIZE)]
     out = torch.empty_like(expected_shard)
     dist.reduce_scatter(out, inputs, op=dist.ReduceOp.SUM, group=det1)
