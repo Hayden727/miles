@@ -69,11 +69,7 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
     # all metrics must be equal (rtol=atol=0) and every dumped tensor must match
     # bitwise (diff_threshold=0, no near-zero absolute floor).
     #
-    # This requires the run to be fully deterministic on both sides, which the test
-    # already configures:
-    #   - --deterministic-mode + fixed-order cross-cell gradient reduction, so the
-    #     healing rebuild reduces gradients bit-identically to the no-fault baseline;
-    #   - --sglang-enable-deterministic-inference for real_rollout (bitwise generation).
+    # This requires the run to be fully deterministic on both sides.
     # Any divergence is a real bug and must be fixed at the source, never hidden by
     # loosening these thresholds.
     compare_metrics(
