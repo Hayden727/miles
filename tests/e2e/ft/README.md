@@ -84,7 +84,10 @@ Dumps use per-tensor boolean predicates over `rel`/`max_abs`/`mean_abs`
 (`compare_dumps(diff_thresholds=[(name_regex, predicate), ...])`): the deterministic
 scenario requires bitwise equality (`rel <= 0`), which relies on both
 `--deterministic-mode` (kernel determinism) and `--debug-deterministic-collective`
-(fixed-tree SUM collectives); every other scenario allows a small
+(fixed-tree SUM collectives). Metrics are also compared at `rtol=atol=0`, except
+`train/grad_norm` (`rtol<=1e-6`): its bracketing depends on the distributed-optimizer
+shard count (8 flat vs 2 per cell), so a few fp32 ulps are inherent, while the grads
+themselves stay bitwise-checked via the dumps. Every other scenario allows a small
 relative diff (`rel <= 0.0085`, with_failure also flooring near-zero MoE-expert grads at
 `max_abs <= 1e-3`). Unmatched tensors are a fail-closed error, so end each list with a `.*`
 catch-all. Exact per-scenario thresholds are in Test Definitions below.
