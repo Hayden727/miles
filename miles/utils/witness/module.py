@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
-from megatron.core import parallel_state as mpu
 from megatron.core import tensor_parallel
 from megatron.core.transformer.utils import sharded_state_dict_default
 from torch import Tensor
 
+from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.event_logger.logger import get_event_logger
 from miles.utils.event_logger.models import WitnessSnapshotParamEvent
 from miles.utils.witness.allocator import WitnessInfo
@@ -38,7 +38,7 @@ def witness_dump_and_clear_stale(
     optimizer: torch.optim.Optimizer,
 ) -> None:
     """Log nonzero witness param rows, then clear stale ring buffer entries."""
-    pp_rank = mpu.get_pipeline_model_parallel_rank()
+    pp_rank = get_parallel_state().pp.rank
 
     for chunk_index, chunk in enumerate(model):
         inner = _unwrap_to_witness_owner(chunk)
@@ -84,7 +84,7 @@ class _DataWitness(nn.Module):
         return _abs_broadcast_add(hidden_states, out)
 
     def sharded_state_dict(self, prefix: str = "", sharded_offsets: tuple = (), metadata: object = None) -> dict:
-        pp_rank = mpu.get_pipeline_model_parallel_rank()
+        pp_rank = get_parallel_state().pp.rank
         # Embed PP rank in the checkpoint key so each pipeline stage has a unique
         # key (e.g. local_head_witness_pp0.witness.weight vs _pp1.witness.weight).
         # Without this, PP>1 causes a sharding validation error because multiple
@@ -99,7 +99,7 @@ class _DataWitness(nn.Module):
             prefix=prefix_with_pp,
             sharded_offsets=sharded_offsets,
             metadata=metadata,
-            tp_group=mpu.get_tensor_model_parallel_group(),
+            tp_group=get_parallel_state().tp.group,
         )
 
 
