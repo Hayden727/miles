@@ -14,7 +14,12 @@ from tests.e2e.ft.conftest_ft.app import create_comparison_app
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
 from tests.e2e.ft.conftest_ft.modes import FTTestMode
 
-from miles.utils.test_utils.comparisons import compare_dumps, compare_metrics
+from miles.utils.test_utils.comparisons import (
+    INPUT_TENSORS_ALLOW_FAILED_PATTERN,
+    INPUT_TENSORS_SKIP_PATTERN,
+    compare_dumps,
+    compare_metrics,
+)
 
 NUM_STEPS: int = 2
 
@@ -36,6 +41,7 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
         rtol=1e-2,
         atol=1e-8,
         key_prefixes=["train/"],
+        exclude_keys=[],
     )
 
     # Match by parallel identity (pp_rank, tp_rank, cp_rank, ep_rank) instead
@@ -44,7 +50,9 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
         baseline_dir=f"{dump_dir}/baseline",
         target_dir=f"{dump_dir}/target",
         diff_thresholds=[(".*", "rel <= 0.0085")],
-        extra_args=["--grouping-skip-keys", "rank", "dp", "edp"],
+        allow_skipped_pattern=INPUT_TENSORS_SKIP_PATTERN,
+        allow_failed_pattern=INPUT_TENSORS_ALLOW_FAILED_PATTERN,
+        grouping_skip_keys=["rank", "dp", "edp"],
     )
     print("No-failure comparison test PASSED")
 

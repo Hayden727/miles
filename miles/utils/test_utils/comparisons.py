@@ -11,15 +11,21 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_METRIC_KEYS: list[str] = ["train/grad_norm", "train/loss"]
 
+# Shared regexes for model-input / metadata tensors that are not weights or grads to
+# compare. Exposed as named constants (not as defaults) so each test passes them
+# explicitly -- every pass/fail knob is visible at the call site, nothing is implicit.
+INPUT_TENSORS_SKIP_PATTERN: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format|.*witness.*"
+INPUT_TENSORS_ALLOW_FAILED_PATTERN: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format"
+
 
 def compare_dumps(
     baseline_dir: str,
     target_dir: str,
     *,
     diff_thresholds: list[tuple[str, str]],
-    allow_skipped_pattern: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format|.*witness.*",
-    allow_failed_pattern: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format",
-    extra_args: list[str] | None = None,
+    allow_skipped_pattern: str,
+    allow_failed_pattern: str,
+    grouping_skip_keys: list[str],
 ) -> None:
     baseline_path = Path(baseline_dir) / "dumps"
     target_path = Path(target_dir) / "dumps"
@@ -33,7 +39,7 @@ def compare_dumps(
         diff_thresholds=diff_thresholds,
         allow_skipped_pattern=allow_skipped_pattern,
         allow_failed_pattern=allow_failed_pattern,
-        extra_args=extra_args,
+        grouping_skip_keys=grouping_skip_keys,
     )
 
     assert result.returncode == 0, (
@@ -50,12 +56,9 @@ def compare_metrics(
     *,
     rtol: float,
     atol: float,
-    key_prefixes: list[str] | None = None,
-    exclude_keys: list[str] | None = None,
+    key_prefixes: list[str],
+    exclude_keys: list[str],
 ) -> None:
-    if key_prefixes is None:
-        key_prefixes = ["train/"]
-
     baseline_events = _read_metric_events(Path(baseline_dir))
     target_events = _read_metric_events(Path(target_dir))
 
@@ -241,7 +244,7 @@ def _run_comparator(
     diff_thresholds: list[tuple[str, str]],
     allow_skipped_pattern: str,
     allow_failed_pattern: str,
-    extra_args: list[str] | None,
+    grouping_skip_keys: list[str],
 ) -> subprocess.CompletedProcess[str]:
     cmd: list[str] = [
         sys.executable,
@@ -253,20 +256,17 @@ def _run_comparator(
         str(target_path),
         "--output-format",
         "json",
-        # Skip 'rank' when grouping bundles: under FT (target) and non-FT (baseline)
-        # the same logical (pp_rank, cp_rank, ep_rank, tp_rank) coordinate maps to a
-        # different absolute rank ID (e.g. baseline rank=4 vs target cell0 rank=2 for
-        # PP=1, CP=0). Without skipping 'rank' the comparator gets `baseline_load_failed`
-        # for every tensor and fails with rc=1.
+        # Metadata keys to ignore when grouping bundles. Callers pass this explicitly;
+        # 'rank' is typically needed because under FT (target) vs non-FT (baseline) the
+        # same logical (pp,cp,ep,tp) coordinate maps to a different absolute rank ID, so
+        # without skipping it the comparator gets baseline_load_failed for every tensor.
         "--grouping-skip-keys",
-        "rank",
+        *grouping_skip_keys,
         "--allow-skipped-pattern",
         allow_skipped_pattern,
         "--allow-failed-pattern",
         allow_failed_pattern,
     ]
-    if extra_args:
-        cmd.extend(extra_args)
     # Keep --diff-threshold strictly last: its nargs="*" greedily consumes every
     # following token, so no flag with a bare value may come after it.
     cmd.append("--diff-threshold")

@@ -15,7 +15,12 @@ from tests.e2e.ft.conftest_ft.app import create_comparison_app
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
 from tests.e2e.ft.conftest_ft.modes import FTTestMode
 
-from miles.utils.test_utils.comparisons import compare_dumps, compare_metrics
+from miles.utils.test_utils.comparisons import (
+    INPUT_TENSORS_ALLOW_FAILED_PATTERN,
+    INPUT_TENSORS_SKIP_PATTERN,
+    compare_dumps,
+    compare_metrics,
+)
 
 NUM_PHASE_A_STEPS: int = 1
 NUM_PHASE_B_STEPS: int = 3
@@ -78,11 +83,15 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
         rtol=0.0,
         atol=0.0,
         key_prefixes=["train/"],
+        exclude_keys=[],
     )
     compare_dumps(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
         diff_thresholds=[(".*", "rel <= 0")],
+        allow_skipped_pattern=INPUT_TENSORS_SKIP_PATTERN,
+        allow_failed_pattern=INPUT_TENSORS_ALLOW_FAILED_PATTERN,
+        grouping_skip_keys=["rank"],
     )
     print("Deterministic healing comparison test PASSED")
 
