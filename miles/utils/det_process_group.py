@@ -68,9 +68,7 @@ class DetProcessGroup(BaseProcessGroup):
 
     def allreduce(self, tensors: list[torch.Tensor], opts: object) -> Work:
         reduce_op = _reduce_op_of(opts)
-        if not _is_deterministic_op(reduce_op):
-            # MAX/MIN and friends are exactly associative-commutative: order cannot
-            # change the bits, so the native implementation is already deterministic.
+        if reduce_op == dist.ReduceOp.MAX or reduce_op == dist.ReduceOp.MIN:
             return self._inner.allreduce(tensors, opts)
 
         for tensor in tensors:
@@ -88,7 +86,7 @@ class DetProcessGroup(BaseProcessGroup):
 
     def _reduce_scatter_base(self, output: torch.Tensor, input: torch.Tensor, opts: object) -> Work:
         reduce_op = _reduce_op_of(opts)
-        if not _is_deterministic_op(reduce_op):
+        if reduce_op == dist.ReduceOp.MAX or reduce_op == dist.ReduceOp.MIN:
             return self._inner._reduce_scatter_base(output, input, opts)
 
         flat = input.contiguous().view(-1)
@@ -107,25 +105,8 @@ class DetProcessGroup(BaseProcessGroup):
     def reduce_scatter(
         self, output_tensors: list[torch.Tensor], input_tensors: list[list[torch.Tensor]], opts: object
     ) -> Work:
-        reduce_op = _reduce_op_of(opts)
-        if not _is_deterministic_op(reduce_op):
-            return self._inner.reduce_scatter(output_tensors, input_tensors, opts)
-
         for output, inputs in zip(output_tensors, input_tensors, strict=True):
-            # output on rank r = fold over ranks q of inputs_q[r]; fold every slot in
-            # the same fixed order and keep this rank's one.
-            for slot, slot_input in enumerate(inputs):
-                folded = _det_full_sum(
-                    slot_input.contiguous().view(-1),
-                    world_size=self.size(),
-                    gather_fn=lambda output, input: self._inner._allgather_base(
-                        output, input, AllgatherOptions()
-                    ).wait(),
-                )
-                if slot == self.rank():
-                    output.copy_(folded.view(output.shape))
-                    if reduce_op == dist.ReduceOp.AVG:
-                        output.div_(self.size())
+            self._reduce_scatter_base(output, torch.cat([t.contiguous().view(-1) for t in inputs]), opts)
         return _CompletedWork()
 
     # ------------------------------------------------------------------ #
@@ -226,15 +207,6 @@ def _det_full_sum(
 def _reduce_op_of(opts: object) -> object:
     """Extract the ReduceOp from an options object (or pass a bare ReduceOp through)."""
     return opts.reduceOp if hasattr(opts, "reduceOp") else opts
-
-
-def _is_deterministic_op(reduce_op: object) -> bool:
-    """Whether the op is order-sensitive and folded deterministically (SUM/AVG).
-
-    Compared with explicit ``==``: ``ReduceOp.__eq__`` handles the RedOpType enum,
-    but tuple containment (``in``) does not, so ``op in (SUM, AVG)`` is always False.
-    """
-    return reduce_op == dist.ReduceOp.SUM or reduce_op == dist.ReduceOp.AVG
 
 
 class _CompletedWork(Work):
