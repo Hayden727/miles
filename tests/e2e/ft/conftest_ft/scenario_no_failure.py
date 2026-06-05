@@ -2,7 +2,7 @@
 # WARNING: Do NOT relax any assert logic in this file. All assertions must remain strict.
 
 
-from tests.e2e.ft.conftest_ft.app import create_comparison_app, run_pipeline
+from tests.e2e.ft.conftest_ft.app import create_comparison_app_and_run_ci
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
 from tests.e2e.ft.conftest_ft.modes import FTTestMode
 
@@ -53,23 +53,12 @@ TEST_NAME: str = "trainer_ft_no_failure"
 PHASES: list[str] = []
 
 
-def run_ci(mode: str) -> None:
-    """Run one mode's full pipeline (entry point for the per-mode CI files)."""
-    run_pipeline(
-        test_name=f"{TEST_NAME}_{mode}",
-        build_baseline_args=_build_baseline_args,
-        build_target_args=_build_target_args,
-        compare_fn=_compare,
-        phases=PHASES,
-        mode=mode,
-    )
-
-
-app = create_comparison_app(
+app, run_ci = create_comparison_app_and_run_ci(
     test_name=TEST_NAME,
     build_baseline_args=_build_baseline_args,
     build_target_args=_build_target_args,
     compare_fn=_compare,
+    phases=PHASES,
 )
 
 if __name__ == "__main__":

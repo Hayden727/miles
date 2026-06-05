@@ -63,15 +63,19 @@ def run_pipeline(
         compare_fn(dump_dir, ft_mode)
 
 
-def create_comparison_app(
+def create_comparison_app_and_run_ci(
     *,
     test_name: str,
     build_baseline_args: BuildArgsFn,
     build_target_args: BuildArgsFn,
     compare_fn: Callable[[str, FTTestMode], None],
     phases: list[str] | None = None,
-) -> typer.Typer:
-    """Generate a typer app with baseline/target/compare/run commands.
+) -> tuple[typer.Typer, Callable[[str], None]]:
+    """Build, from one wiring, the manual typer app and a run_ci(mode) one-shot runner.
+
+    Returns ``(app, run_ci)``: ``app`` exposes run/baseline/target/compare for manual use;
+    ``run_ci(mode)`` runs the full pipeline for a single mode (used by the per-mode CI entry
+    files), writing dumps under a per-mode test name so concurrent CI modes don't collide.
 
     For simple (no-phase) tests, leave phases empty.
     For multi-phase tests (e.g. with_failure), provide phase names like ["phase_a", "phase_b"].
@@ -156,7 +160,18 @@ def create_comparison_app(
         args = get_common_train_args(ft_mode, dump_dir=output_dir, num_steps=num_steps, enable_dumper=False)
         run_training(train_args=args, mode=ft_mode)
 
-    return app
+    def run_ci(mode: str) -> None:
+        """Run one mode's full pipeline (entry point for the per-mode CI files)."""
+        run_pipeline(
+            test_name=f"{test_name}_{mode}",
+            build_baseline_args=build_baseline_args,
+            build_target_args=build_target_args,
+            compare_fn=compare_fn,
+            phases=phases,
+            mode=mode,
+        )
+
+    return app, run_ci
 
 
 def create_non_comparison_app(
