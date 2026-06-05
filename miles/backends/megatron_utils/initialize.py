@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 from megatron.core import mpu, tensor_parallel
 from megatron.core.config import set_experimental_flag
+from megatron.core.distributed.deterministic_collectives import enable_deterministic_collectives
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
 
@@ -127,6 +128,12 @@ def init(
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True, warn_only=False)
+
+    if args.debug_deterministic_collective:
+        assert not args.overlap_grad_reduce, "deterministic collectives require synchronous grad sync"
+        if args.rank == 0:
+            logger.info("> enabling deterministic collectives (fixed-tree SUM fold)")
+        enable_deterministic_collectives()
 
     if args.tp_comm_overlap:
         from megatron.training.initialize import _initialize_tp_communicators
