@@ -1,7 +1,7 @@
 """Process group with bitwise-deterministic SUM reductions.
 
-``DetProcessGroup`` wraps an inner process group (a c10d NCCL group or a torchft
-``ProcessGroupNCCL``). Every collective delegates to the inner group except the
+``DetProcessGroup`` wraps an inner c10d NCCL group. Every collective delegates to
+the inner group except the
 SUM/AVG reductions — ``allreduce`` and ``reduce_scatter`` — which are computed as
 all-gather (pure data movement, no arithmetic) plus a fixed local fold: a pairwise
 tree for power-of-two world sizes, an ascending-rank fold otherwise. The summation
@@ -134,16 +134,9 @@ class DetProcessGroup(BaseProcessGroup):
     def _det_full_sum(self, flat: torch.Tensor) -> torch.Tensor:
         """Return the fixed-order cross-rank sum of a contiguous 1-D tensor."""
         world_size = self.size()
-        if hasattr(self._inner, "_allgather_base"):
-            # Flat gather: avoids the list form's flatten/unflatten staging.
-            gathered_flat = torch.empty(world_size * flat.numel(), dtype=flat.dtype, device=flat.device)
-            self._inner._allgather_base(gathered_flat, flat, AllgatherOptions()).wait()
-            gathered = list(gathered_flat.view(world_size, -1).unbind(dim=0))
-        else:
-            # torchft process groups only expose the list form.
-            gathered = [torch.empty_like(flat) for _ in range(world_size)]
-            self._inner.allgather([gathered], [flat], AllgatherOptions()).wait()
-        return _fold_gathered_sum(gathered)
+        gathered_flat = torch.empty(world_size * flat.numel(), dtype=flat.dtype, device=flat.device)
+        self._inner._allgather_base(gathered_flat, flat, AllgatherOptions()).wait()
+        return _fold_gathered_sum(list(gathered_flat.view(world_size, -1).unbind(dim=0)))
 
     # ------------------------------------------------------------------ #
     # Plain delegation
