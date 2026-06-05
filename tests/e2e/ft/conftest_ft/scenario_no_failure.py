@@ -4,13 +4,13 @@
 import sys
 from pathlib import Path
 
-_MILES_ROOT: Path = Path(__file__).resolve().parents[3]
+_MILES_ROOT: Path = Path(__file__).resolve().parents[4]
 _miles_root_str = str(_MILES_ROOT)
 if _miles_root_str in sys.path:
     sys.path.remove(_miles_root_str)
 sys.path.insert(0, _miles_root_str)
 
-from tests.e2e.ft.conftest_ft.app import create_comparison_app
+from tests.e2e.ft.conftest_ft.app import create_comparison_app, run_pipeline
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
 from tests.e2e.ft.conftest_ft.modes import FTTestMode
 
@@ -57,8 +57,24 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
     print("No-failure comparison test PASSED")
 
 
+TEST_NAME: str = "trainer_ft_no_failure"
+PHASES: list[str] = []
+
+
+def run_ci(mode: str) -> None:
+    """Run one mode's full pipeline (entry point for the per-mode CI files)."""
+    run_pipeline(
+        test_name=f"{TEST_NAME}_{mode}",
+        build_baseline_args=_build_baseline_args,
+        build_target_args=_build_target_args,
+        compare_fn=_compare,
+        phases=PHASES,
+        mode=mode,
+    )
+
+
 app = create_comparison_app(
-    test_name=Path(__file__).stem,
+    test_name=TEST_NAME,
     build_baseline_args=_build_baseline_args,
     build_target_args=_build_target_args,
     compare_fn=_compare,
