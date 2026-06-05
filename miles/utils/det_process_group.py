@@ -61,11 +61,10 @@ class DetProcessGroup(BaseProcessGroup):
     def __init__(self, inner: dist.ProcessGroup) -> None:
         super().__init__(inner.rank(), inner.size())
         self._inner = inner
-        # Register the inner NCCL backend for cuda so _device_types reports cuda.
-        # Object collectives (all_gather_object/broadcast_object_list) read the
-        # device from it; without this they fall back to cpu and fail on the
-        # cuda-only inner. Collective dispatch still goes through this object's
-        # Python methods -- the registration only feeds device/backend lookups.
+        # Register the cuda backend as torchft's ProcessGroupNCCL._create_pg does, so
+        # _device_types reports cuda and object collectives pick cuda over cpu. Only
+        # feeds device/backend lookups; collectives still dispatch to our methods.
+        self._set_default_backend(BaseProcessGroup.BackendType.CUSTOM)
         self._register_backend(torch.device("cuda"), BaseProcessGroup.BackendType.CUSTOM, self._inner)
 
     # ------------------------------------------------------------------ #
