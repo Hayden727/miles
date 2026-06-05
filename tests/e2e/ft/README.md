@@ -1,17 +1,23 @@
 # Fault Tolerance E2E Tests
 
-## Test Overview
+## Layout
 
-| Test | Type | What it verifies |
+Each scenario's logic lives in a library module `conftest_ft/scenario_<scenario>.py`. CI
+runs it through thin **per-mode entry files** `test_trainer_ft_<scenario>_<mode>.py` — one
+mode each, registered with `register_cuda_ci(est_time=..., suite="stage-c-8-gpu-h200",
+labels=["ft"])`. The CUDA CI runner executes each entry as bare `python3 <file>` (exit code
+= pass/fail), so the entry just calls the scenario's `run_ci(mode)`.
+
+| Scenario (`conftest_ft/scenario_*.py`) | Type | What it verifies |
 |------|------|-----------------|
-| `test_trainer_ft_no_failure.py` | Comparison | indep_dp matches normal DP when no faults |
-| `test_trainer_ft_with_failure.py` | Comparison, multi-phase | indep_dp matches normal DP after fault + ckpt resume |
-| `test_trainer_ft_deterministic.py` | Comparison | indep_dp matches normal DP with stop+start healing (no missed steps) |
-| `test_ft_random.py` | Non-comparison | System survives random crashes without hanging |
+| `scenario_no_failure` | Comparison | indep_dp matches normal DP when no faults |
+| `scenario_with_failure` | Comparison, multi-phase | indep_dp matches normal DP after fault + ckpt resume |
+| `scenario_deterministic` | Comparison, multi-phase | healing state transfer is bitwise-correct (stop+start) |
+| `scenario_ft_random` | Non-comparison | system survives random crashes without hanging |
 
 ## Mode Variants
 
-Each test runs with `--mode`:
+Each scenario runs with a `--mode`:
 
 All modes are **disaggregated** (training and rollout on separate nodes). Modes without rollout use debug rollout data.
 
@@ -25,45 +31,72 @@ All modes are **disaggregated** (training and rollout on separate nodes). Modes 
 
 Batch sizes are deliberately **not** divisible by num_cells to test uneven sample distribution across replicas (e.g. DP4 + batch 5 → 2,1,1,1).
 
+Authorized CI skips (no entry file): `6node_dp4_cp2_tp2_pp2_ep2_etp2` (multi-node) and `with_failure × dp4_cp2`.
+
 ## Running
 
-**Required**: `MILES_SCRIPT_OUTPUT_DIR` environment variable must be set. Dump files are written to `$MILES_SCRIPT_OUTPUT_DIR/dumps/<test_name>/`.
+### In CI
 
-### Comparison tests (`test_trainer_ft_no_failure.py`, `test_trainer_ft_with_failure.py`, `test_trainer_ft_deterministic.py`)
+The FT entries are gated on the `run-ci-ft` PR label (FT is expensive — it does not run on
+every PR). With that label set, every `test_trainer_ft_<scenario>_<mode>.py` runs on the
+`stage-c-8-gpu-h200` suite. To add a new `(scenario, mode)` to CI, add an entry file (copy
+an existing one and change `run_ci(...)`'s mode). To add a brand-new label, edit
+`tests/ci/labels.py` and create the matching `run-ci-<label>` GitHub label.
 
-These compare baseline (normal DP) against target (indep_dp). They support 4 subcommands:
+### Manually
 
-- `run` — full pipeline: prepare + baseline + target + compare
-- `baseline` / `target` — run one side independently (useful for debugging)
-- `compare` — re-run comparison on existing dumps (no GPU needed)
-
-```bash
-# Full pipeline (CI)
-python tests/e2e/ft/test_trainer_ft_no_failure.py run --mode dp2_cp2_tp2_ep2
-
-# Step by step (debugging)
-python tests/e2e/ft/test_trainer_ft_no_failure.py baseline --mode dp2_cp2_tp2_ep2 --dump-dir /tmp/ft
-python tests/e2e/ft/test_trainer_ft_no_failure.py target   --mode dp2_cp2_tp2_ep2 --dump-dir /tmp/ft
-python tests/e2e/ft/test_trainer_ft_no_failure.py compare  --mode dp2_cp2_tp2_ep2 --dump-dir /tmp/ft
-
-# With-failure has phases (phase_a saves ckpt, phase_b resumes + injects fault)
-python tests/e2e/ft/test_trainer_ft_with_failure.py run --mode dp4_cp2
-
-# Deterministic healing (designed for large-scale disagg)
-python tests/e2e/ft/test_trainer_ft_deterministic.py run --mode 6node_dp4_cp2_tp2_pp2_ep2_etp2
-```
-
-### Non-comparison tests (`test_ft_random.py`)
-
-Single `run` subcommand. No baseline — just verifies the system doesn't crash.
+These files no longer insert the repo root into `sys.path`; set `PYTHONPATH` to the repo
+root (CI sets it automatically). Run a single mode via its entry file, or any mode (incl.
+the authorized-skip ones) via the scenario's typer app — which has `run` / `baseline` /
+`target` / `compare` subcommands.
 
 ```bash
-python tests/e2e/ft/test_ft_random.py run --mode dp4_cp2 --seed 42 --num-steps 50
+# One mode, exactly as CI runs it
+PYTHONPATH=. python tests/e2e/ft/test_trainer_ft_no_failure_dp2_cp2_tp2_ep2.py
+
+# Any mode via the scenario app:
+#   run     — full pipeline: prepare + baseline + target + compare
+#   baseline / target — run one side independently (debugging)
+#   compare — re-run comparison on existing dumps (no GPU needed)
+PYTHONPATH=. python tests/e2e/ft/conftest_ft/scenario_no_failure.py run --mode dp4_cp2
+PYTHONPATH=. python tests/e2e/ft/conftest_ft/scenario_no_failure.py compare --mode dp4_cp2 --dump-dir /tmp/ft
+
+# with_failure / deterministic have phases (phase_a saves ckpt; phase_b resumes + injects)
+PYTHONPATH=. python tests/e2e/ft/conftest_ft/scenario_with_failure.py run --mode dp2_cp2_tp2_ep2
+
+# random soak (manual knobs)
+PYTHONPATH=. python tests/e2e/ft/conftest_ft/scenario_ft_random.py run --mode dp2_cp2_tp2_ep2 --seed 42 --num-steps 50
 ```
+
+Dumps are written under `/node_public/dumps/<test_name>/` (see `conftest_ft/app.py`
+`resolve_dump_dir`).
+
+## Comparison criterion (per-tensor predicates)
+
+Tensor dumps are compared by `compare_dumps(diff_thresholds=[(name_regex, predicate), ...])`,
+which forwards `--diff-threshold` to the sglang comparator. A tensor uses the **first
+fullmatching** regex's predicate — a boolean expression over `rel` / `max_abs` / `mean_abs`
+(`< <= > >=`, `and`/`or`, parentheses), e.g. `"rel <= 0.0085 or max_abs <= 1e-3"`. A tensor
+matching **no** pattern is a fail-closed error, so every list ends with a `.*` catch-all.
+This keeps any near-zero tolerance scoped to the specific tensors that need it, so a real
+bug on any other tensor is never hidden. Metrics use `compare_metrics(rtol, atol, ...)`.
+
+Per scenario:
+
+- **no_failure**: dump `rel <= 0.0085` for all; metrics `rtol=1e-2, atol=1e-8`. Roughly
+  equal, **not** bitwise — baseline (normal DP) and target (indep_dp) have different world
+  sizes / reduction orders.
+- **with_failure**: dump `rel <= 0.0085` for all, **plus** MoE expert grads
+  (`grad__...mlp.experts.*`) additionally tolerate `max_abs <= 1e-3` (starved near-zero
+  experts whose tiny reduction-order residual is FP noise; weights stay bit-identical);
+  metrics `rtol=5e-2, atol=1e-7`.
+- **deterministic**: dump `rel <= 0` (**bitwise**) and metrics `rtol=0, atol=0` (exact). The
+  whole run is forced deterministic so healing must reproduce the no-fault baseline
+  bit-for-bit; any divergence is a real state-copy bug, not tolerated.
 
 ## Debug Rollout Data
 
-Modes without rollout engines (`has_rollout == False`) use pre-recorded rollout data via `--load-debug-rollout-data --debug-train-only`, skipping real rollout generation.
+Modes without rollout engines (`has_real_rollout == False`) use pre-recorded rollout data via `--load-debug-rollout-data --debug-train-only`, skipping real rollout generation.
 
 `conftest_ft/execution.py` `prepare()` downloads the data via `U.hf_download_dataset()`.
 
@@ -75,7 +108,7 @@ causing NaN gradients in GRPO training.
 
 ```bash
 # Step 1: Generate rollout data (5-layer model + real sglang rollout, no dumper)
-python tests/e2e/ft/test_trainer_ft_no_failure.py generate-data \
+PYTHONPATH=. python tests/e2e/ft/conftest_ft/scenario_no_failure.py generate-data \
     --mode dp2_cp2_real_rollout --num-steps 12 --output-dir /tmp/gen_rollout
 
 # Step 2: Locate the generated rollout data
@@ -90,7 +123,7 @@ huggingface-cli upload --repo-type dataset fzyzcjy/miles-test-rollout-Qwen3-30B-
 
 ## Test Definitions
 
-### `test_trainer_ft_no_failure.py`
+### `scenario_no_failure`
 
 Comparison test. Verifies indep_dp produces the same results as normal DP when no faults occur.
 
@@ -101,19 +134,19 @@ Steps: 2
 1. Baseline: run normal DP training with debug rollout data
 2. Target: run indep_dp training with the same data
 3. Compare:
-   - Tensor-level: compare_dumps (weights, grads via dumper & sglang comparator)
+   - Tensor-level: compare_dumps (weights, grads via dumper & sglang comparator), rel <= 0.0085
    - Metric-level: compare_metrics (MetricEvent, requires train/grad_norm and train/loss)
 
-Note: results are roughly equal, not bitwise — allreduce kernel ordering differs.
+Roughly equal, not bitwise — allreduce kernel ordering differs across topologies.
 ```
 
-### `test_trainer_ft_with_failure.py`
+### `scenario_with_failure`
 
 Multi-phase comparison test. Verifies indep_dp matches normal DP after fault + checkpoint resume.
 
 ```
 Type: comparison, multi-phase (phase_a + phase_b)
-Phase A steps: 1, Phase B steps: 4, rtol: 5e-2
+Phase A steps: 1, Phase B steps: 4, metrics rtol: 5e-2
 
 Phase A (both baseline and target):
   1. Run 1 step of training
@@ -133,20 +166,22 @@ Phase B — target:
   6. Rollout 3: _refresh_cells() healing → N cells
   7. Rollout 4: N cells stable
 
-Compare: phase_b dumps and metrics (baseline vs target, rtol=5e-2 for accumulated error).
+Compare: phase_b dumps (rel <= 0.0085, MoE expert grads also tolerate max_abs <= 1e-3)
+and metrics (rtol=5e-2).
 
 Fault injection via --ci-ft-test-actions JSON (data-driven, executed by RayTrainGroup).
-The JSON `at_rollout` field specifies which rollout_id triggers the action (replaces old `after_step`).
+The JSON `at_rollout` field specifies which rollout_id triggers the action.
 The `attempt` field (for actor-level actions like `crash_before_allreduce`) specifies which retry attempt to match.
 ```
 
-### `test_trainer_ft_deterministic.py`
+### `scenario_deterministic`
 
-Multi-phase comparison test. Verifies healing state transfer is bitwise correct.
+Multi-phase comparison test. Verifies healing state transfer is **bitwise** correct.
 
 ```
 Type: comparison, multi-phase (phase_a + phase_b)
-Phase A steps: 1, Phase B steps: 3, rtol: 1e-2 (3e-2 / atol 2e-8 for real-rollout modes)
+Phase A steps: 1, Phase B steps: 3
+Comparison: dump rel <= 0 (bitwise), metrics rtol=0 / atol=0 (exact)
 
 Phase A: same as with_failure (1 step + save ckpt).
 
@@ -156,15 +191,16 @@ Phase B — target timeline:
   3. Rollout 3: healing at start (recv_ckpt from cell_0), then normal execution
 
 Both baseline and target use --deterministic-mode + env vars (NCCL_ALGO=Ring,
-NVTE_ALLOW_NONDETERMINISTIC_ALGO=0, CUBLAS_WORKSPACE_CONFIG=:4096:8) for
-bitwise reproducibility.
+NVTE_ALLOW_NONDETERMINISTIC_ALGO=0, CUBLAS_WORKSPACE_CONFIG=:4096:8) so the run is fully
+deterministic and healing must reproduce the no-fault baseline bit-for-bit. A state-copy
+bug is easy to make and an approximate check would miss it, hence zero tolerance.
 
 Bitwise verification: --use-fault-tolerance --ft-components train auto-enables
 --save-local-weight-checksum and --enable-event-analyzer. The event_analyzer
 cross_replica_weight_checksum rule checks cell-to-cell bitwise equality after healing.
 ```
 
-### `test_ft_random.py`
+### `scenario_ft_random`
 
 Non-comparison soak test. Verifies the system survives random crashes without hanging.
 
@@ -175,7 +211,7 @@ Steps: 30 (default), configurable via --num-steps
 Architecture (external fault injection, not inside training loop):
   1. Start training with indep_dp + control server (port 18080) + mini FT controller
   2. Start a background daemon thread that:
-     a. Sleeps a random interval (exponential distribution, mean ~15s / crash_probability)
+     a. Sleeps a random interval (exponential distribution, mean ~60s / crash_probability)
      b. GET /api/v1/cells — discover alive cells
      c. Pick a random alive cell (skip if <=1 alive)
      d. POST /api/v1/cells/{name}/inject-fault with random failure mode
