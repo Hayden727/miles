@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.distributed as dist
-from miles.utils.det_process_group import fold_gathered_sum
+from miles.utils.det_process_group import det_sum_inplace
 
 from miles.utils.distributed_utils import get_gloo_group
 from miles.utils.indep_dp import IndepDPInfo
@@ -117,14 +117,14 @@ def _deterministic_sum_inplace_across_replicas(
     util: GeneralPGUtil,
     pg: dist.ProcessGroup,
 ) -> None:
-    """Cross-cell SUM in-place: all-gather plus the same fixed fold as DetProcessGroup."""
-    assert tensor.is_contiguous(), "deterministic cross-replica sum requires a contiguous tensor"
-
+    """Cross-cell SUM in-place sharing DetProcessGroup's fold; only the gather differs."""
     world_size = util.get_size(pg)
     if world_size == 1:
         return
 
-    flat = tensor.view(-1)
-    gathered = [torch.empty_like(flat) for _ in range(world_size)]
-    util.all_gather(gathered, flat, pg)
-    flat.copy_(fold_gathered_sum(gathered))
+    def _gather(flat: torch.Tensor) -> list[torch.Tensor]:
+        gathered = [torch.empty_like(flat) for _ in range(world_size)]
+        util.all_gather(gathered, flat, pg)
+        return gathered
+
+    det_sum_inplace(tensor, gather_fn=_gather)
