@@ -1,14 +1,6 @@
 # NOTE: You MUST read tests/e2e/ft/README.md as source-of-truth and documentations
 # WARNING: Do NOT relax any assert logic in this file. All assertions must remain strict.
 
-import sys
-from pathlib import Path
-
-_MILES_ROOT: Path = Path(__file__).resolve().parents[4]
-_miles_root_str = str(_MILES_ROOT)
-if _miles_root_str in sys.path:
-    sys.path.remove(_miles_root_str)
-sys.path.insert(0, _miles_root_str)
 
 from tests.e2e.ft.conftest_ft.app import create_comparison_app, run_pipeline
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
