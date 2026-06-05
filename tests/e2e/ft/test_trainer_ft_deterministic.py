@@ -32,16 +32,6 @@ _DETERMINISTIC_ACTIONS: list[dict] = [
     {"at_rollout": NUM_PHASE_A_STEPS + 1, "action": "start_cell_at_end", "cell_index": -1},
 ]
 
-# 2-cell healing is bitwise (floor never triggers: 0 failures). With >=4 cells the
-# healing reduction spans a different number of cells than the no-fault baseline,
-# so near-zero (starved low-traffic) MoE expert grads (abs ~1e-5) and an occasional
-# near-zero k_layernorm grad (abs ~3.9e-4, sign-flips at ~1e-4 magnitude) cannot
-# reduce bit-identically even under --deterministic-mode. Real trafficked grads
-# (>=~1e-2) never fail the relative check, so the floor only ever applies to
-# near-zero tensors; 1e-3 sits in the gap below real grads and is <0.2% of
-# grad_norm. Normal-magnitude tensors stay strictly bitwise on the relative check.
-_NEAR_ZERO_GRAD_ATOL: float = 1e-3
-
 
 def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enable_dumper: bool = True) -> str:
     is_phase_a: bool = dump_dir.endswith("phase_a")
@@ -72,19 +62,32 @@ def _build_target_args(mode: FTTestMode, dump_dir: str, enable_dumper: bool = Tr
 
 
 def _compare(dump_dir: str, mode: FTTestMode) -> None:
-    rtol: float = 3e-2 if mode.has_real_rollout else 1e-2
-    atol: float = 2e-8 if mode.has_real_rollout else 1e-8
+    # Bitwise (zero-tolerance) comparison. The deterministic healing test exists to
+    # prove that state pulled from another replica during healing is reconstructed
+    # *bit-for-bit*: a state-copy bug is trivial to introduce and an approximate
+    # ("looks close") check would silently miss it. So every assertion is exact --
+    # all metrics must be equal (rtol=atol=0) and every dumped tensor must match
+    # bitwise (diff_threshold=0, no near-zero absolute floor).
+    #
+    # This requires the run to be fully deterministic on both sides, which the test
+    # already configures:
+    #   - --deterministic-mode + fixed-order cross-cell gradient reduction, so the
+    #     healing rebuild reduces gradients bit-identically to the no-fault baseline;
+    #   - --sglang-enable-deterministic-inference for real_rollout (bitwise generation).
+    # Any divergence is a real bug and must be fixed at the source, never hidden by
+    # loosening these thresholds.
     compare_metrics(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
-        rtol=rtol,
-        atol=atol,
+        rtol=0.0,
+        atol=0.0,
         key_prefixes=["train/"],
     )
     compare_dumps(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
-        abs_diff_threshold=_NEAR_ZERO_GRAD_ATOL,
+        diff_threshold=0.0,
+        abs_diff_threshold=0.0,
     )
     print("Deterministic healing comparison test PASSED")
 
