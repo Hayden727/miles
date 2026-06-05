@@ -74,16 +74,11 @@ def _compute_zero_advantage_witness_ids(
 ) -> dict[int, set[int]]:
     """Return witness_ids where all per-token advantages == 0.0, keyed by rollout_id.
 
-    Unioned across cells on purpose. Each witness/sample is owned by exactly one
-    cell (data-parallel split), so a cell only computes advantages for its own
-    shard. But the WitnessSnapshotParamEvent is taken on the per-cell weight,
-    which under indep_dp reflects the GLOBAL gradient (summed across cells). A
-    zero-advantage sample contributes nothing to that global gradient, so its
-    witness is absent from EVERY cell's weight — including cells that never
-    computed its advantage. Filtering per (rollout_id, cell_index) would leave a
-    cell unable to excuse the zero-advantage witnesses owned by its peers,
-    producing false WitnessDataMismatch issues (e.g. a GRPO group whose 8 samples
-    all share one reward, split even/odd across two cells).
+    Unioned across cells: under indep_dp the per-cell weight snapshot reflects the
+    GLOBAL (allreduced) gradient, so a zero-advantage sample contributes nothing
+    and its witness is absent from EVERY cell — even cells that never owned it.
+    Keying per (rollout_id, cell_index) would let a cell excuse only its own shard,
+    falsely flagging peers' zero-advantage witnesses as missing.
     """
     result: dict[int, set[int]] = defaultdict(set)
 
