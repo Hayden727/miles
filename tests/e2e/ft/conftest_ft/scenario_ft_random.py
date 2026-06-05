@@ -3,37 +3,24 @@
 
 import logging
 import random
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Annotated
 
 import requests
-
-logger = logging.getLogger(__name__)
-
-_MILES_ROOT: Path = Path(__file__).resolve().parents[3]
-_miles_root_str = str(_MILES_ROOT)
-if _miles_root_str in sys.path:
-    sys.path.remove(_miles_root_str)
-sys.path.insert(0, _miles_root_str)
-
 import typer
-from tests.ci.ci_register import register_cuda_ci
+
 from tests.e2e.ft.conftest_ft.app import resolve_dump_dir
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args, prepare, run_training
 from tests.e2e.ft.conftest_ft.modes import FTTestMode, resolve_mode
 
 from miles.utils.test_utils.fault_injector import FailureMode
 
-register_cuda_ci(est_time=1800, suite="stage-c-8-gpu-h200", labels=["ft"])
+logger = logging.getLogger(__name__)
 
 app: typer.Typer = typer.Typer()
 
-# The mode CI runs (bare `python3 test_ft_random.py`). Single soak mode; others run
-# manually via `python tests/e2e/ft/test_ft_random.py run --mode <x>`.
-_CI_MODE: str = "dp2_cp2_tp2_ep2"
+TEST_NAME: str = "trainer_ft_random"
 
 _CONTROL_SERVER_PORT: int = 18080
 _MEAN_INTERVAL_SECONDS: float = 60.0
@@ -112,20 +99,21 @@ def _run_fault_injection_loop(
             logger.info("Failed to inject fault into %s", cell_name, exc_info=True)
 
 
-@app.command()
-def run(
-    mode: Annotated[str, typer.Option(help="Test mode variant")],
-    seed: Annotated[int, typer.Option(help="Random seed for fault injection")] = 42,
-    num_steps: Annotated[int, typer.Option(help="Number of train() calls")] = 30,
-    crash_probability: Annotated[float, typer.Option(help="Per-step crash probability per cell")] = 0.1,
+def _run_soak(
+    mode: str,
+    *,
+    seed: int = 42,
+    num_steps: int = 30,
+    crash_probability: float = 0.1,
 ) -> None:
     """Random failure soak test.
 
-    Starts a background thread that injects faults at random intervals
-    via the control server HTTP API. The mini FT controller auto-recovers.
+    Starts a background thread that injects faults at random intervals via the
+    control server HTTP API. The mini FT controller auto-recovers; the test passes
+    if training completes without hanging.
     """
     ft_mode: FTTestMode = resolve_mode(mode)
-    dump_dir: str = resolve_dump_dir(Path(__file__).stem)
+    dump_dir: str = resolve_dump_dir(f"{TEST_NAME}_{mode}")
     print(f"Dump directory: {dump_dir}")
     mean_interval: float = _MEAN_INTERVAL_SECONDS / max(crash_probability, 0.01)
     print(f"Seed: {seed}, Steps: {num_steps}, Mean injection interval: {mean_interval:.1f}s")
@@ -158,10 +146,21 @@ def run(
     print(f"Random failure soak test PASSED (seed={seed}, steps={num_steps})")
 
 
+def run_ci(mode: str) -> None:
+    """Entry point for the per-mode CI file (default soak knobs)."""
+    _run_soak(mode)
+
+
+@app.command()
+def run(
+    mode: Annotated[str, typer.Option(help="Test mode variant")],
+    seed: Annotated[int, typer.Option(help="Random seed for fault injection")] = 42,
+    num_steps: Annotated[int, typer.Option(help="Number of train() calls")] = 30,
+    crash_probability: Annotated[float, typer.Option(help="Per-step crash probability per cell")] = 0.1,
+) -> None:
+    """Random failure soak test (manual any-mode entry)."""
+    _run_soak(mode, seed=seed, num_steps=num_steps, crash_probability=crash_probability)
+
+
 if __name__ == "__main__":
-    # CUDA CI runs this file as bare `python3 <file>`, so run the soak mode directly
-    # (exit code = pass/fail) instead of dispatching to the typer app.
-    if len(sys.argv) > 1:
-        app()
-    else:
-        run(mode=_CI_MODE)
+    app()
