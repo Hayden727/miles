@@ -1537,6 +1537,14 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=os.environ.get("MILES_SCRIPT_ENV_REPORT", ""),
                 help="JSON string containing environment report from external launcher.",
             )
+            parser.add_argument(
+                "--debug-deterministic-collective",
+                action="store_true",
+                default=False,
+                help="Debug/test only: replace order-sensitive SUM collectives with a "
+                "fixed-tree fold so different reduction topologies become bitwise-comparable. "
+                "Slow; never enable in production.",
+            )
             return parser
 
         def add_network_arguments(parser):
