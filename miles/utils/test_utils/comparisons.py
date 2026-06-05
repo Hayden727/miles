@@ -17,26 +17,24 @@ def compare_dumps(
     target_dir: str,
     *,
     diff_threshold: float = 0.0085,
-    abs_diff_threshold: float = 0.0,
+    abs_diff_thresholds: list[tuple[str, float]] | None = None,
     allow_skipped_pattern: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format|.*witness.*",
     allow_failed_pattern: str = "input_ids|positions|cu_seqlens_q|cu_seqlens_kv|qkv_format",
     extra_args: list[str] | None = None,
 ) -> None:
     """Run the sglang dump comparator and assert no meaningful tensor diverged.
 
-    The comparator's pass criterion is purely relative (cosine ``rel_diff <=
-    diff_threshold``). That metric is degenerate for near-zero tensors: a tiny
-    absolute difference on a near-zero value yields a huge relative diff. At test
-    scale (few tokens, 128 experts) many low-traffic MoE experts have near-zero
-    gradients, so a fault+recovery run whose rebuilt collective reduces in a
-    different order produces large *relative* diffs on those experts despite an
-    absolute difference that is negligible vs the model gradient scale.
+    The comparator's relative (cosine-like) criterion ``rel_diff <= diff_threshold``
+    is degenerate for near-zero tensors: a tiny absolute difference on a near-zero
+    value yields a huge relative diff.
 
-    ``abs_diff_threshold`` adds an absolute floor (``torch.allclose`` semantics):
-    a tensor is accepted if it passes the relative check OR its max absolute diff
-    is within the floor. Normal-magnitude tensors are unaffected (their abs diff
-    dwarfs the floor), so the strict relative check still governs them. The floor
-    defaults to 0.0 (no effect); only fault-tolerance comparisons opt in.
+    ``abs_diff_thresholds`` is a list of ``(name_regex, floor)`` pairs forwarded to
+    the comparator's ``--abs-diff-threshold``: a tensor whose name fullmatches a
+    regex passes if it is within the relative threshold OR its max absolute diff is
+    within that regex's floor (``torch.allclose`` semantics). This is per-tensor on
+    purpose — a single global floor would loosen *every* tensor and could hide a
+    near-zero real bug. Patterns are tried in order, first match wins; unmatched
+    tensors stay strict (floor 0.0). Default ``None`` applies no floor anywhere.
     """
     baseline_path = Path(baseline_dir) / "dumps"
     target_path = Path(target_dir) / "dumps"
@@ -48,7 +46,7 @@ def compare_dumps(
         baseline_path=baseline_path,
         target_path=target_path,
         diff_threshold=diff_threshold,
-        abs_diff_threshold=abs_diff_threshold,
+        abs_diff_thresholds=abs_diff_thresholds,
         allow_skipped_pattern=allow_skipped_pattern,
         allow_failed_pattern=allow_failed_pattern,
         extra_args=extra_args,
@@ -56,8 +54,8 @@ def compare_dumps(
 
     assert result.returncode == 0, (
         f"Dump comparator failed (rc={result.returncode}): {baseline_path} vs {target_path}. "
-        f"The comparator applies the relative threshold ({diff_threshold}), the absolute floor "
-        f"({abs_diff_threshold}), and the allow/skip patterns itself; see comparator_report.jsonl "
+        f"The comparator applies the relative threshold ({diff_threshold}), the per-regex absolute "
+        f"floors ({abs_diff_thresholds}), and the allow/skip patterns itself; see comparator_report.jsonl "
         f"under {target_path} for the offending tensors."
     )
     print(f"Dump comparison passed: {baseline_path} vs {target_path}")
@@ -258,7 +256,7 @@ def _run_comparator(
     baseline_path: Path,
     target_path: Path,
     diff_threshold: float,
-    abs_diff_threshold: float,
+    abs_diff_thresholds: list[tuple[str, float]] | None,
     allow_skipped_pattern: str,
     allow_failed_pattern: str,
     extra_args: list[str] | None,
@@ -282,13 +280,15 @@ def _run_comparator(
         "rank",
         "--diff-threshold",
         str(diff_threshold),
-        "--abs-diff-threshold",
-        str(abs_diff_threshold),
         "--allow-skipped-pattern",
         allow_skipped_pattern,
         "--allow-failed-pattern",
         allow_failed_pattern,
     ]
+    if abs_diff_thresholds:
+        cmd.append("--abs-diff-threshold")
+        for pattern, value in abs_diff_thresholds:
+            cmd.extend([pattern, str(value)])
     if extra_args:
         cmd.extend(extra_args)
 

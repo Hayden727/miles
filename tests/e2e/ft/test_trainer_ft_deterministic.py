@@ -83,7 +83,6 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
         diff_threshold=0.0,
-        abs_diff_threshold=0.0,
     )
     print("Deterministic healing comparison test PASSED")
 

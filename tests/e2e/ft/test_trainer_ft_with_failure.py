@@ -24,12 +24,16 @@ NUM_PHASE_B_STEPS: int = 4
 # rebuilds the cross-cell collective (quorum 0 -> 1 -> 2), so its reduction order
 # differs from the no-fault baseline. At this test scale most of the 128 MoE
 # experts are starved (~0 tokens) -> near-zero gradients where the comparator's
-# relative (cosine) metric is degenerate: abs diffs ~1e-5 for experts (and the
-# failing set varies run to run, confirming FP noise not a bug), up to ~3.9e-4
-# for a near-zero k_layernorm grad. Real trafficked grads (>=~1e-2) never fail the
-# relative check, so this floor only ever applies to near-zero tensors; 1e-3 sits
-# in the clear gap below real grads and is <0.2% of grad_norm (~0.8). Weights
-# match. NOT a blanket relaxation — normal-magnitude tensors stay strict on rel.
+# relative (cosine) metric is degenerate: abs diffs ~1e-5 for experts (failing set
+# varies run to run, confirming FP noise not a bug), up to ~3.9e-4 for a near-zero
+# k_layernorm grad. Real trafficked grads (>=~1e-2) never fail the relative check;
+# 1e-3 sits in the clear gap below real grads and is <0.2% of grad_norm (~0.8).
+#
+# FIXME: this applies the floor to EVERY tensor (".*"), which is looser than ideal
+# (a near-zero real bug on any tensor would be tolerated). It should be narrowed to
+# the specific near-zero tensor-name regexes (MoE expert grads, k_layernorm) once
+# their dump names are confirmed, or this test made deterministic+bitwise like
+# test_trainer_ft_deterministic.py.
 _NEAR_ZERO_GRAD_ATOL: float = 1e-3
 
 # rollout_id in phase_b starts from NUM_PHASE_A_STEPS (ckpt resume offset)
@@ -84,7 +88,7 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
     compare_dumps(
         baseline_dir=f"{dump_dir}/baseline/phase_b",
         target_dir=f"{dump_dir}/target/phase_b",
-        abs_diff_threshold=_NEAR_ZERO_GRAD_ATOL,
+        abs_diff_thresholds=[(".*", _NEAR_ZERO_GRAD_ATOL)],
     )
     print("With-failure comparison test PASSED")
 
