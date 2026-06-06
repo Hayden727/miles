@@ -11,7 +11,7 @@ import torch.distributed as dist
 
 import miles.utils.eval_config
 from miles.ray.ray_actor import RayActor
-from miles.utils.det_process_group import register_det_nccl_backend
+from miles.utils.det_process_group import DET_NCCL_BACKEND_NAME, register_det_nccl_backend
 from miles.utils.distributed_utils import init_gloo_group
 from miles.utils.env_report import collect_and_print_node_env_report
 from miles.utils.heartbeat_utils import HeartbeatStatus, SimpleHeartbeat
@@ -92,7 +92,7 @@ class TrainRayActor(RayActor):
 
         if args.debug_deterministic_collective:
             register_det_nccl_backend()
-            args.distributed_backend = "det_nccl"
+            args.distributed_backend = DET_NCCL_BACKEND_NAME
             logger.info("Deterministic collectives: training world uses the det_nccl backend")
 
         # Use hybrid backend when FSDP CPU offload is enabled with a CPU backend

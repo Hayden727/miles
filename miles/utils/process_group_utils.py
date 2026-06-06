@@ -6,11 +6,11 @@ import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import _object_to_tensor, _tensor_to_object
 
-from miles.utils.det_process_group import det_all_reduce
+from miles.utils.det_process_group import DET_NCCL_BACKEND_NAME, det_all_reduce
 
 
 def _is_det_world() -> bool:
-    return dist.is_initialized() and dist.get_backend() == "det_nccl"
+    return dist.is_initialized() and dist.get_backend() == DET_NCCL_BACKEND_NAME
 
 
 @dataclass(frozen=True)

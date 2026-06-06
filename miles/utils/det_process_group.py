@@ -24,7 +24,7 @@ from torch.distributed.distributed_c10d import AllgatherOptions
 logger = logging.getLogger(__name__)
 
 
-_BACKEND_NAME = "det_nccl"
+DET_NCCL_BACKEND_NAME = "det_nccl"
 _backend_registered = False
 
 # Cap on the gather buffer so the fold never allocates world_size x the full tensor
@@ -43,9 +43,9 @@ def register_det_nccl_backend() -> None:
     global _backend_registered
     if _backend_registered:
         return
-    dist.Backend.register_backend(_BACKEND_NAME, _create_det_nccl_backend, extended_api=True, devices=["cuda"])
+    dist.Backend.register_backend(DET_NCCL_BACKEND_NAME, _create_det_nccl_backend, extended_api=True, devices=["cuda"])
     _backend_registered = True
-    logger.info("Registered torch.distributed backend %s", _BACKEND_NAME)
+    logger.info("Registered torch.distributed backend %s", DET_NCCL_BACKEND_NAME)
 
 
 def _create_det_nccl_backend(dist_backend_opts: object, pg_options: object) -> "DetProcessGroup":
@@ -212,7 +212,7 @@ class DetProcessGroup(BaseProcessGroup):
         return _CompletedWork()
 
     def getBackendName(self) -> str:
-        return "det_nccl"
+        return DET_NCCL_BACKEND_NAME
 
 
 def det_all_reduce(
