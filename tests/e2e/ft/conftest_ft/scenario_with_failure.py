@@ -59,8 +59,17 @@ def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enabl
         # checkpoints leaked that drift into the phase_b comparison (observed: a
         # run-to-run reproducible rel=0.0113 on a small k_layernorm grad at step 0,
         # over the 0.85% threshold before any fault was even injected).
+        #
+        # The baseline checkpoint has no witness params and its distributed-optimizer
+        # buffer shape differs from the FT model's, so both sides skip the optimizer
+        # state (symmetric: phase_b starts with fresh Adam state on both sides) and
+        # tolerate the witness keys missing from the checkpoint (log_all): witness
+        # params keep their zero initialization, which is their correct fresh state.
+        # A genuinely missing weight cannot slip through: phase_b dumps every weight
+        # and grad and the comparison would fail immediately.
         phase_a_dir = dump_dir.replace("/phase_b", "/phase_a").replace("/target/", "/baseline/")
         base += f"--load {phase_a_dir}/ckpt "
+        base += "--no-load-optim --dist-ckpt-strictness log_all "
         if is_target:
             base += f"--ci-ft-test-actions '{json.dumps(_WITH_FAILURE_ACTIONS)}' "
 

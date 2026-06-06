@@ -152,7 +152,10 @@ Phase A (both baseline and target):
 
 Phase B (both sides) resumes from the BASELINE's phase_a checkpoint: phase_a trains
 flat DP vs FT cells whose reduction orders differ slightly, and per-side checkpoints
-would leak that drift into the comparison before any fault is injected.
+would leak that drift into the comparison before any fault is injected. Because the
+baseline checkpoint has no witness params (different distributed-optimizer buffer
+shape), both sides load with --no-load-optim (symmetric fresh Adam state) and
+--dist-ckpt-strictness log_all (witness keys keep their zero initialization).
 
 Phase B — baseline:
   1. Resume from baseline phase_a checkpoint
