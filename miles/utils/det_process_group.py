@@ -13,7 +13,6 @@ Debug/test use only: the fold trades bandwidth and synchrony for determinism.
 """
 
 import logging
-from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -82,12 +81,7 @@ class DetProcessGroup(BaseProcessGroup):
             return self._inner.allreduce(tensors, opts)
 
         for tensor in tensors:
-            det_all_reduce(
-                tensor,
-                world_size=self.size(),
-                gather_fn=lambda output, input: self._inner._allgather_base(output, input, AllgatherOptions()).wait(),
-                reduce_op=reduce_op,
-            )
+            det_all_reduce(tensor, group=self._inner, reduce_op=reduce_op)
         return _CompletedWork()
 
     def allreduce_coalesced(self, tensors: list[torch.Tensor], opts: object) -> Work:
@@ -136,13 +130,7 @@ class DetProcessGroup(BaseProcessGroup):
         self, output: torch.Tensor, flat_input: torch.Tensor, *, out_offset: int, reduce_op: object
     ) -> None:
         out_flat = output.view(-1) if output.is_contiguous() else torch.empty_like(output).view(-1)
-        _det_chunked_fold(
-            flat_input,
-            out_flat,
-            out_offset=out_offset,
-            world_size=self.size(),
-            gather_fn=lambda output, input: self._inner._allgather_base(output, input, AllgatherOptions()).wait(),
-        )
+        _det_chunked_fold(flat_input, out_flat, out_offset=out_offset, group=self._inner)
         if not output.is_contiguous():
             output.copy_(out_flat.view(output.shape))
         if reduce_op == dist.ReduceOp.AVG:
@@ -218,28 +206,24 @@ class DetProcessGroup(BaseProcessGroup):
 
 
 def det_all_reduce(
-    tensor: torch.Tensor,
-    *,
-    world_size: int,
-    gather_fn: Callable[[torch.Tensor, torch.Tensor], None],
-    reduce_op: object = dist.ReduceOp.SUM,
+    tensor: torch.Tensor, *, group: dist.ProcessGroup, reduce_op: object = dist.ReduceOp.SUM
 ) -> None:
-    """SUM/AVG ``tensor`` across ranks in-place with the fixed fold; the all-gather is injected.
+    """SUM/AVG ``tensor`` across ranks in-place with the fixed fold.
 
-    ``gather_fn(output, input)`` follows the ``_allgather_base`` calling convention: fill
-    the flat ``output`` (``world_size * input.numel()``) with every rank's ``input``.
-    Pure data movement -- the local fold defines the (shared) summation order.
+    ``group`` may be any process group exposing ``_allgather_base`` or the list-form
+    ``allgather`` (c10d backends and torchft groups alike): the gather is pure data
+    movement and the local fold defines the (shared) summation order.
     """
     if not tensor.is_contiguous():
         work = tensor.contiguous()
-        det_all_reduce(work, world_size=world_size, gather_fn=gather_fn, reduce_op=reduce_op)
+        det_all_reduce(work, group=group, reduce_op=reduce_op)
         tensor.copy_(work)
         return
 
     flat = tensor.view(-1)
-    _det_chunked_fold(flat, flat, out_offset=0, world_size=world_size, gather_fn=gather_fn)
+    _det_chunked_fold(flat, flat, out_offset=0, group=group)
     if reduce_op == dist.ReduceOp.AVG:
-        flat.div_(world_size)
+        flat.div_(group.size())
 
 
 def _det_chunked_fold(
@@ -247,8 +231,7 @@ def _det_chunked_fold(
     out_flat: torch.Tensor,
     *,
     out_offset: int,
-    world_size: int,
-    gather_fn: Callable[[torch.Tensor, torch.Tensor], None],
+    group: dist.ProcessGroup,
 ) -> None:
     """Fold ``flat_input`` across ranks chunk by chunk, writing the summed elements
     covering ``[out_offset, out_offset + out_flat.numel())`` into ``out_flat``.
@@ -256,6 +239,7 @@ def _det_chunked_fold(
     Chunking bounds gather memory and cannot change bits. ``out_flat`` may alias
     ``flat_input``: writes stay within the already-gathered chunk.
     """
+    world_size = group.size()
     total = flat_input.numel()
     chunk_numel = max(1, min(total, _GATHER_BUFFER_CAP_BYTES // (world_size * flat_input.element_size())))
     gather_buf = torch.empty(world_size * chunk_numel, dtype=flat_input.dtype, device=flat_input.device)
@@ -266,10 +250,19 @@ def _det_chunked_fold(
         lo = max(start, out_offset)
         hi = min(start + count, out_end)
         buf = gather_buf[: world_size * count]
-        gather_fn(buf, flat_input[start : start + count])
+        _gather_into(group, buf, flat_input[start : start + count])
         if lo < hi:
             folded = _fold_gathered_sum(list(buf.view(world_size, count).unbind(dim=0)))
             out_flat[lo - out_offset : hi - out_offset].copy_(folded[lo - start : hi - start])
+
+
+def _gather_into(group: dist.ProcessGroup, output: torch.Tensor, input: torch.Tensor) -> None:
+    if hasattr(group, "_allgather_base"):
+        group._allgather_base(output, input, AllgatherOptions()).wait()
+    else:
+        # torchft process groups expose only the list form.
+        rows = list(output.view(group.size(), -1).unbind(dim=0))
+        group.allgather([rows], [input], AllgatherOptions()).wait()
 
 
 def _reduce_op_of(opts: object) -> object:

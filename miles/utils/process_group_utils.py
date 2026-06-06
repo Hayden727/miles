@@ -161,15 +161,7 @@ class _RawPGUtil(GeneralPGUtil):
 
     def all_reduce(self, tensor: torch.Tensor, group: dist.ProcessGroup, op: dist.ReduceOp) -> None:
         if (op == dist.ReduceOp.SUM or op == dist.ReduceOp.AVG) and _is_det_world():
-            world_size = self.get_size(group)
-            det_all_reduce(
-                tensor,
-                world_size=world_size,
-                gather_fn=lambda output, input: self.all_gather(
-                    list(output.view(world_size, -1).unbind(dim=0)), input, group
-                ),
-                reduce_op=op,
-            )
+            det_all_reduce(tensor, group=group, reduce_op=op)
             return
 
         opts = dist.AllreduceOptions()
