@@ -141,7 +141,9 @@ def run_ci(
     injector_thread.start()
 
     try:
-        run_training(train_args=train_args, mode=ft_mode)
+        # dump_dir wipes the previous run's outputs; the event analyzer otherwise
+        # reads a mix of event streams accumulated across runs and misfires.
+        run_training(train_args=train_args, mode=ft_mode, dump_dir=dump_dir)
     finally:
         stop_event.set()
         injector_thread.join(timeout=5)

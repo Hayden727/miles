@@ -299,6 +299,17 @@ class TestZeroAdvantageExclusion:
         assert 11 in issues[0].actual_witness_ids
         assert 11 not in issues[0].expected_witness_ids
 
+    def test_zero_advantage_exclusion_uses_final_attempt_only(self) -> None:
+        """A crashed attempt's all-zero advantage events must not excuse ids the successful retry trains."""
+        events: list[Event] = [
+            _make_allocate(rollout_id=0, witness_id_to_sample_index={10: 0, 11: 1}, attempt=1),
+            _make_advantage(rollout_id=0, advantages=[[0.0], [0.0]], witness_ids=[[10], [11]], attempt=0),
+            _make_advantage(rollout_id=0, advantages=[[5.0], [0.0]], witness_ids=[[10], [11]], attempt=1),
+            _make_snapshot(rollout_id=0, nonzero_witness_ids=[10]),
+            _make_step_end(rollout_id=0, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
+        ]
+        assert check(events) == []
+
     def test_nonzero_advantage_sample_still_required(self) -> None:
         """Witness ID with nonzero advantage must still appear — missing produces an issue."""
         events: list[Event] = [

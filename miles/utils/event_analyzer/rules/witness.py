@@ -83,10 +83,21 @@ def _compute_zero_advantage_witness_ids(
     Snapshot checks must excuse these ids cumulatively (see _zero_adv_ids_up_to): a
     witness id is trained exactly once, so a zero-advantage sample stays absent from
     every later snapshot too, while the expected set keeps it forever.
-    """
-    result: dict[int, set[int]] = defaultdict(set)
 
+    Only the highest-attempt events per rollout count, mirroring the allocate-event
+    handling: a crashed attempt's partial advantage events would otherwise excuse ids
+    that the successful retry trains for real.
+    """
+    max_attempt_by_rollout: dict[int, int] = {}
     for event in events:
+        prev = max_attempt_by_rollout.get(event.rollout_id)
+        if prev is None or event.attempt > prev:
+            max_attempt_by_rollout[event.rollout_id] = event.attempt
+
+    result: dict[int, set[int]] = defaultdict(set)
+    for event in events:
+        if event.attempt != max_attempt_by_rollout[event.rollout_id]:
+            continue
         for adv_tokens, wid_tokens in zip(event.advantages, event.witness_ids, strict=True):
             if all(v == 0.0 for v in adv_tokens):
                 result[event.rollout_id].add(wid_tokens[0])
