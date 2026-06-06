@@ -319,7 +319,9 @@ def _run_experiment(*, world_size: int, numel: int, seed: int, timeout_s: float,
         print(f"  {pair:<42} {mark}")
 
     nccl_paths = ["c10d_default", "c10d_newgroup", "torchft_q0", "torchft_q1"]
-    cross_comm_equal = all(pairwise[f"{a} vs {b}"]["mismatch_elems"] == 0 for a, b in zip(nccl_paths, nccl_paths[1:], strict=False))
+    cross_comm_equal = all(
+        pairwise[f"{a} vs {b}"]["mismatch_elems"] == 0 for a, b in zip(nccl_paths[:-1], nccl_paths[1:], strict=True)
+    )
     rs_equal = pairwise["c10d_default vs c10d_reduce_scatter"]["mismatch_elems"] == 0
     rs_cross_comm_equal = pairwise["c10d_newgroup_rs vs c10d_reduce_scatter"]["mismatch_elems"] == 0
     print(f"\n  VERDICT: allreduce comm-instance-invariant (c10d/newgroup/torchft/rebuilt) = {cross_comm_equal}")
