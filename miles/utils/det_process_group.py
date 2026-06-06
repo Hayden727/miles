@@ -242,15 +242,11 @@ def _det_chunked_fold(
     world_size: int,
     gather_fn: Callable[[torch.Tensor, torch.Tensor], None],
 ) -> None:
-    """Fold ``flat_input`` across ranks chunk by chunk; write the summed elements
+    """Fold ``flat_input`` across ranks chunk by chunk, writing the summed elements
     covering ``[out_offset, out_offset + out_flat.numel())`` into ``out_flat``.
 
-    All ranks gather the same input range per chunk (a collective requirement), and
-    each keeps only the part overlapping its output window -- allreduce passes the
-    full window, reduce-scatter its shard. Chunk boundaries cannot change bits:
-    every output element is folded over the same operands in the same order.
-    ``out_flat`` may alias ``flat_input`` (allreduce, Megatron's aliased shards):
-    writes land only in the already-gathered chunk, never ahead of a read.
+    Chunking bounds gather memory and cannot change bits. ``out_flat`` may alias
+    ``flat_input``: writes stay within the already-gathered chunk.
     """
     total = flat_input.numel()
     chunk_numel = max(1, min(total, _GATHER_BUFFER_CAP_BYTES // (world_size * flat_input.element_size())))
