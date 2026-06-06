@@ -4,7 +4,7 @@
 import json
 
 from tests.e2e.ft.conftest_ft.app import create_comparison_app_and_run_ci
-from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
+from tests.e2e.ft.conftest_ft.execution import DETERMINISTIC_TRAIN_ARGS, get_common_train_args, get_ft_args
 from tests.e2e.ft.conftest_ft.modes import FTTestMode
 
 from miles.utils.test_utils.comparisons import (
@@ -58,6 +58,17 @@ def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enabl
     # by ~10%). indep_dp-vs-flat equivalence is what scenario_no_failure and
     # scenario_deterministic already verify; this scenario isolates the fault + heal.
     base += get_ft_args(mode)
+
+    # Real rollout needs deterministic collectives on top: the degraded-quorum commit
+    # after the crash brackets the grad reduction differently, the resulting ulp-level
+    # weight drift eventually flips sampled tokens, and from there the runs diverge
+    # for real (observed: a deterministic 5.1% step-7 train/grad_norm gap). With the
+    # fixed-order collectives the faulted run reproduces the fault-free run exactly,
+    # so generation never diverges. The replay modes keep native collectives: their
+    # data cannot diverge, and the post-crash det-collective abort is known to wedge
+    # the survivors' device under pipeline parallelism (pp2).
+    if mode.has_real_rollout:
+        base += DETERMINISTIC_TRAIN_ARGS
 
     if is_phase_a:
         base += f"--save {dump_dir}/ckpt --save-interval 1 "
