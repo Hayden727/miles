@@ -91,17 +91,9 @@ class DetProcessGroup(BaseProcessGroup):
         reduce_op = _reduce_op_of(opts)
         if reduce_op == dist.ReduceOp.MAX or reduce_op == dist.ReduceOp.MIN:
             return self._inner._reduce_scatter_base(output, input, opts)
-        assert input.numel() == self.size() * output.numel(), (
-            f"uneven reduce_scatter_tensor: input numel {input.numel()} != "
-            f"{self.size()} x output numel {output.numel()}"
-        )
 
         det_reduce_scatter(
-            output,
-            input.contiguous().view(-1),
-            group=self._inner,
-            out_offset=self.rank() * output.numel(),
-            reduce_op=reduce_op,
+            output, input, group=self._inner, rank=self.rank(), world_size=self.size(), reduce_op=reduce_op
         )
         return _CompletedWork()
 
@@ -119,7 +111,7 @@ class DetProcessGroup(BaseProcessGroup):
             assert (
                 flat_inputs[self.rank()].numel() == output.numel()
             ), f"slot {self.rank()} numel {flat_inputs[self.rank()].numel()} != output numel {output.numel()}"
-            det_reduce_scatter(
+            _det_reduce_scatter_window(
                 output,
                 torch.cat(flat_inputs),
                 group=self._inner,
@@ -218,15 +210,36 @@ def det_all_reduce(tensor: torch.Tensor, *, group: dist.ProcessGroup, reduce_op:
 
 def det_reduce_scatter(
     output: torch.Tensor,
+    input: torch.Tensor,
+    *,
+    group: dist.ProcessGroup,
+    rank: int,
+    world_size: int,
+    reduce_op: object = dist.ReduceOp.SUM,
+) -> None:
+    """SUM/AVG-reduce ``input`` across ranks with the fixed fold and write this rank's
+    ``1/world_size`` slice into ``output`` (mirrors ``dist.reduce_scatter_tensor``).
+    """
+    assert input.numel() == world_size * output.numel(), (
+        f"uneven reduce_scatter: input numel {input.numel()} != {world_size} x output numel {output.numel()}"
+    )
+    _det_reduce_scatter_window(
+        output,
+        input.contiguous().view(-1),
+        group=group,
+        out_offset=rank * output.numel(),
+        reduce_op=reduce_op,
+    )
+
+
+def _det_reduce_scatter_window(
+    output: torch.Tensor,
     flat_input: torch.Tensor,
     *,
     group: dist.ProcessGroup,
     out_offset: int,
-    reduce_op: object = dist.ReduceOp.SUM,
+    reduce_op: object,
 ) -> None:
-    """SUM/AVG-reduce ``flat_input`` across ranks with the fixed fold and write the
-    window ``[out_offset, out_offset + output.numel())`` of the result into ``output``.
-    """
     out_flat = output.view(-1) if output.is_contiguous() else torch.empty_like(output).view(-1)
     _det_chunked_fold(flat_input, out_flat, out_offset=out_offset, group=group)
     if not output.is_contiguous():
