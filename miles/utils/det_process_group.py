@@ -110,9 +110,9 @@ class DetProcessGroup(BaseProcessGroup):
             assert (
                 inputs[self.rank()].numel() == output.numel()
             ), f"slot {self.rank()} numel {inputs[self.rank()].numel()} != output numel {output.numel()}"
-            for slot, slot_input in enumerate(inputs):
+            for slot_idx, slot_input in enumerate(inputs):
                 _det_reduce_scatter_slot(
-                    output if slot == self.rank() else None, slot_input, group=self._inner, reduce_op=reduce_op
+                    output if slot_idx == self.rank() else None, slot_input, group=self._inner, reduce_op=reduce_op
                 )
         return _CompletedWork()
 
@@ -147,8 +147,6 @@ class DetProcessGroup(BaseProcessGroup):
         reduce_op = _reduce_op_of(opts)
         if reduce_op == dist.ReduceOp.MAX or reduce_op == dist.ReduceOp.MIN:
             return self._inner.reduce(tensors, opts)
-        # SUM/AVG reduce is order-sensitive too; fold on every rank (the root gets
-        # the required result, non-root buffers are unspecified by the contract).
         return self.allreduce(tensors, opts)
 
     def reduce_scatter_tensor_coalesced(
@@ -222,9 +220,9 @@ def det_reduce_scatter(
 
     flat = input.contiguous().view(-1)
     slot_numel = output.numel()
-    for slot in range(world_size):
-        slot_input = flat[slot * slot_numel : (slot + 1) * slot_numel]
-        _det_reduce_scatter_slot(output if slot == rank else None, slot_input, group=group, reduce_op=reduce_op)
+    for slot_idx in range(world_size):
+        slot_input = flat[slot_idx * slot_numel : (slot_idx + 1) * slot_numel]
+        _det_reduce_scatter_slot(output if slot_idx == rank else None, slot_input, group=group, reduce_op=reduce_op)
 
 
 def _det_reduce_scatter_slot(
