@@ -79,6 +79,13 @@ async def configure_sglang(args: Namespace) -> None:
 # ------------------------------- Megatron -------------------------------------
 
 
+# Phases that already produced their one dump under ``only_first_step``.
+# DumperMegatronUtil is rebuilt every train step (each rebuild wipes and rewrites
+# the dump dir, so by default the surviving dump is the LAST step's); the latch
+# must therefore live at module level.
+_PHASES_DUMPED_ONCE: set[DumperPhase] = set()
+
+
 class DumperMegatronUtil:
     def __init__(self, args: Namespace, model: Sequence[torch.nn.Module], phase: DumperPhase) -> None:
         self.phase = phase
@@ -106,6 +113,8 @@ class DumperMegatronUtil:
         dumper.dump_model(extracted_model, get_grad=get_grad)
         dumper.step()
         dumper.configure(enable=False)
+        if self.overrides.get("only_first_step"):
+            _PHASES_DUMPED_ONCE.add(self.phase)
 
     @staticmethod
     def _extract_model(model: Sequence[torch.nn.Module]) -> torch.nn.Module:
@@ -120,12 +129,14 @@ class DumperMegatronUtil:
             overrides = _get_phase_override_configs(args, phase)
         if not overrides.get("enable"):
             return False
+        if overrides.get("only_first_step") and phase in _PHASES_DUMPED_ONCE:
+            return False
 
         merged = {
             "dir": str(_get_dir(args)),
             "exp_name": phase.value,
             "enable_output_console": False,
-            **overrides,
+            **{k: v for k, v in overrides.items() if k != "only_first_step"},
         }
 
         # Only write dump files on effective DP rank 0 (covers both intra-DP

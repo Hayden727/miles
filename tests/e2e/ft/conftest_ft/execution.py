@@ -48,7 +48,12 @@ def prepare(mode: FTTestMode) -> None:
 
 
 def get_common_train_args(
-    mode: FTTestMode, *, dump_dir: str, num_steps: int | None = None, enable_dumper: bool = True
+    mode: FTTestMode,
+    *,
+    dump_dir: str,
+    num_steps: int | None = None,
+    enable_dumper: bool = True,
+    dumper_only_first_step: bool = False,
 ) -> str:
     ckpt_args = (
         f"--hf-checkpoint {_MODEL_DIR}/{mode.model_name} " f"--ref-load {_MODEL_DIR}/{mode.model_name}_torch_dist "
@@ -117,9 +122,11 @@ def get_common_train_args(
 
     dumper_args = ""
     if enable_dumper:
+        only_first_step = "only_first_step=1 " if dumper_only_first_step else ""
         dumper_args = (
             f"--dumper-dir {dump_dir}/dumps "
-            f"--dumper-fwd-bwd enable=1 enable_model_value=1 enable_model_grad=1 include_parallel_rank_in_filename=1 "
+            f"--dumper-fwd-bwd enable=1 enable_model_value=1 enable_model_grad=1 "
+            f"include_parallel_rank_in_filename=1 {only_first_step}"
             f"--dumper-source-patcher-config-train {_MEGATRON_SOURCE_PATCHER_CONFIG_PATH} "
         )
 
