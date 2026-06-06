@@ -160,7 +160,7 @@ class _RawPGUtil(GeneralPGUtil):
         return group.size()
 
     def all_reduce(self, tensor: torch.Tensor, group: dist.ProcessGroup, op: dist.ReduceOp) -> None:
-        if op == dist.ReduceOp.SUM and _is_det_world():
+        if (op == dist.ReduceOp.SUM or op == dist.ReduceOp.AVG) and _is_det_world():
             world_size = self.get_size(group)
             det_all_reduce(
                 tensor,
@@ -169,6 +169,8 @@ class _RawPGUtil(GeneralPGUtil):
                     list(output.view(world_size, -1).unbind(dim=0)), input, group
                 ),
             )
+            if op == dist.ReduceOp.AVG:
+                tensor.div_(world_size)
             return
 
         opts = dist.AllreduceOptions()
@@ -235,12 +237,6 @@ class MultiPGUtil:
         is a pure copy, all ranks receive a bitwise-identical result regardless of
         floating-point non-determinism in the reduce path.
         """
-        if _is_det_world():
-            assert op == dist.ReduceOp.SUM, f"det multi-group reduce supports SUM only, got {op}"
-            for group in groups_inner_to_outer:
-                GeneralPGUtil.create(group).all_reduce(tensor, group, op)
-            return
-
         for group in groups_inner_to_outer:
             GeneralPGUtil.create(group).reduce(tensor, group, op)
 
