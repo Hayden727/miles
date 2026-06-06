@@ -60,38 +60,43 @@ def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enabl
     base += get_ft_args(mode)
 
     # Deterministic kernels remove run-to-run kernel noise between the two compared
-    # runs (with identical data, weights, and topology, that noise was the only
-    # remaining diff source: half the step-0 grad dumps showed ulp-level rel diffs
-    # and a small layernorm grad amplified them to 2.5% > 0.85%). This deliberately
-    # does NOT include the det_nccl fixed-order collectives, whose post-crash abort
-    # is known to wedge survivors.
+    # runs. This deliberately does NOT include the det_nccl fixed-order collectives,
+    # whose post-crash abort is known to wedge survivors.
     base += DETERMINISTIC_KERNEL_ARGS
 
-    # Real rollout: the faulted side replays the rollout data the fault-free side
-    # generated and saved (real_rollout runs always --save-debug-rollout-data into
-    # their own dump dir). The degraded-quorum commit after the crash accumulates
-    # microbatches in a different floating-point bracketing - a local effect no
-    # collective ordering can remove (deterministic collectives were tried: every
-    # reduction here is 2-way, so they are a mathematical no-op and the run was
-    # bit-identical with and without them) - and with live generation that ulp-level
-    # weight drift eventually flips sampled tokens, after which the runs diverge for
-    # real (a deterministic 5.1% step-7 train/grad_norm gap). Replaying pins the data,
-    # so the drift stays at the ulp level exactly like the replay modes, which pass.
-    # Engine + update_weights coverage stays real on both phase_a sides and the
-    # baseline phase_b; fault x engine coexistence is covered by
-    # scenario_deterministic's real_rollout mode.
-    if mode.has_real_rollout and is_target and not is_phase_a:
-        baseline_phase_b = dump_dir.replace("/target/", "/baseline/")
-        base += f"--load-debug-rollout-data {baseline_phase_b}/rollout_data/{{rollout_id}}.pt "
+    # Real rollout: BOTH phase_b sides replay the same rollout data, which the
+    # baseline generates in the dedicated phase_b_datagen run (real_rollout runs
+    # always --save-debug-rollout-data into their own dump dir). Comparing a
+    # generating run against a replaying run is not clean: the two pipelines leave a
+    # deterministic, bit-reproducible residue (the same q_layernorm grad differed by
+    # rel=2.5e-2 across independent reruns, unchanged by deterministic kernels), and
+    # with live generation on the faulted side the post-crash degraded-quorum
+    # commit's microbatch bracketing drift even flips sampled tokens, after which the
+    # runs diverge for real (a deterministic 5.1% step-7 train/grad_norm gap).
+    # Replaying on both sides keeps the trainer pipeline identical and isolates the
+    # fault, which is what this scenario is about. Engine + update_weights coverage
+    # stays real on both phase_a sides and the datagen run; fault x engine
+    # coexistence is covered by scenario_deterministic's real_rollout mode.
+    is_datagen: bool = dump_dir.endswith("phase_b_datagen")
+    baseline_phase_a = f"{dump_dir.rsplit('/', 2)[0]}/baseline/phase_a"
 
     if is_phase_a:
         base += f"--save {dump_dir}/ckpt --save-interval 1 "
         base += f"--debug-exit-after-rollout {NUM_PHASE_A_STEPS} "
+    elif is_datagen:
+        if mode.has_real_rollout and not is_target:
+            base += f"--load {baseline_phase_a}/ckpt "
+        else:
+            # The pipeline runs every phase on both sides; only the baseline's
+            # generated data is consumed, so everything else is a no-op run.
+            base += "--num-rollout 0 "
     else:
         # Both sides resume from the BASELINE's phase_a checkpoint so phase_b starts
         # from identical weights and optimizer state.
-        phase_a_dir = dump_dir.replace("/phase_b", "/phase_a").replace("/target/", "/baseline/")
-        base += f"--load {phase_a_dir}/ckpt "
+        if mode.has_real_rollout:
+            datagen_dir = f"{dump_dir.rsplit('/', 2)[0]}/baseline/phase_b_datagen"
+            base += f"--load-debug-rollout-data {datagen_dir}/rollout_data/{{rollout_id}}.pt "
+        base += f"--load {baseline_phase_a}/ckpt "
         if is_target:
             base += f"--ci-ft-test-actions '{json.dumps(_WITH_FAILURE_ACTIONS)}' "
 
@@ -126,7 +131,7 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
 
 
 TEST_NAME: str = "trainer_ft_with_failure"
-PHASES: list[str] = ["phase_a", "phase_b"]
+PHASES: list[str] = ["phase_a", "phase_b_datagen", "phase_b"]
 
 
 app, run_ci = create_comparison_app_and_run_ci(
