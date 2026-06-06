@@ -103,7 +103,11 @@ def _run_fault_injection_loop(
 def run_ci(
     mode: Annotated[str, typer.Option(help="Test mode variant")],
     seed: Annotated[int, typer.Option(help="Random seed for fault injection")] = 42,
-    num_steps: Annotated[int, typer.Option(help="Number of train() calls")] = 30,
+    # Bounded by the pre-recorded debug rollout data, which has 12 rollouts (see
+    # README "How to regenerate": generate-data --num-steps 12). The previous
+    # default of 30 was unreachable: a healthy run dies at rollout 12 with
+    # FileNotFoundError on 12.pt.
+    num_steps: Annotated[int, typer.Option(help="Number of train() calls")] = 12,
     crash_probability: Annotated[float, typer.Option(help="Per-step crash probability per cell")] = 0.1,
 ) -> None:
     """Random failure soak test.
