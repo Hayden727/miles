@@ -81,8 +81,10 @@ class _Worker:
         assert self._cross.allreduce([t], opts).wait(), f"{self._name}: cross warmup failed"
         return {"name": self._name, "use_abort": self._cross._use_abort}
 
-    def build_native_cell_pg(self, *, store_addr: str, rank: int, long_timeout_s: float = 3600.0) -> dict:
-        """RAW c10d NCCL PG for the W<->D 'cell' (no torchft timer): the wedge medium."""
+    def build_native_cell_pg(
+        self, *, store_addr: str, rank: int, prefix: str = "wedged_peer_cell", long_timeout_s: float = 3600.0
+    ) -> dict:
+        """RAW c10d NCCL PG for a 2-rank 'cell' (no torchft timer): the wedge medium."""
         import torch
         from torch.distributed import PrefixStore
         from torch.distributed import ProcessGroupNCCL as BaseProcessGroupNCCL
@@ -90,7 +92,7 @@ class _Worker:
 
         host, port = store_addr.split(":")
         store = TCPStore(host_name=host, port=int(port), is_master=False)
-        prefixed = PrefixStore("wedged_peer_cell", store)
+        prefixed = PrefixStore(prefix, store)
 
         opts = BaseProcessGroupNCCL.Options()
         opts._timeout = timedelta(seconds=long_timeout_s)
@@ -201,6 +203,7 @@ def _run(exp: str, *, store_base: str, cell_store_addr: str, timeout_s: float, n
     surv = _spawn("S")
     wedged = _spawn("W")
     sibling = _spawn("D")
+    workers = [surv, wedged, sibling]
 
     try:
         # Cross pair (S rank0, W rank1) + W<->D native cell PG, all warmed up.
@@ -220,6 +223,37 @@ def _run(exp: str, *, store_base: str, cell_store_addr: str, timeout_s: float, n
             timeout=120,
         )
         print("  cross pair + native cell PG built and warmed")
+
+        if exp.startswith("self_occluded"):
+            # 503903's shape: the SURVIVOR's own orphaned cell collective spins on
+            # its single hw connection, so S's cross kernel (and the teardown work
+            # commDestroySync waits on) can never launch/retire. The far peer W is
+            # alive and idle -- irrelevant by construction.
+            s2 = _spawn("S2")
+            workers.append(s2)
+            ray.get(
+                [
+                    surv.build_native_cell_pg.remote(store_addr=cell_store_addr, rank=0, prefix="surv_cell"),
+                    s2.build_native_cell_pg.remote(store_addr=cell_store_addr, rank=1, prefix="surv_cell"),
+                ],
+                timeout=120,
+            )
+            native = ray.get(surv.enqueue_native_inflight.remote(), timeout=30)  # S2 alive, never joins
+            print(f"  S native orphaned in-flight (S2 alive, never posts): {native}")
+            time.sleep(_SETTLE_S)
+            print(f"  {_confirm_gpu_wedged(surv, who='S')} (S itself must be occluded)")
+
+            inflight = ray.get(surv.enqueue_inflight_cross.remote(numel=numel), timeout=30)
+            print(f"  S cross allreduce queued behind its own spinning cell kernel: {inflight}")
+
+            what = "errored()" if exp.endswith("errored") else "abort()"
+            ref = (surv.errored_cross if exp.endswith("errored") else surv.abort_cross).remote()
+            try:
+                out = ray.get(ref, timeout=_VERDICT_S)
+                return f"{what} returned in <{_VERDICT_S}s: {out} (NOT reproduced)"
+            except ray.exceptions.GetTimeoutError:
+                print(f"  *** {what} BLOCKED >{_VERDICT_S}s (REPRODUCED bug B shape) *** killing S2 (cell sibling)")
+                return f"*** {what} BLOCKED >{_VERDICT_S}s (REPRODUCED) *** then: {_kill_then_await(ref, victim=s2, what=what)}"
 
         # The real failure shape: D dies, then W wedges in a real cell collective.
         sibling.die.remote()
