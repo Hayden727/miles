@@ -158,11 +158,12 @@ def _find_mismatches(
 
 
 def _zero_adv_ids_up_to(zero_adv_witness_ids_by_rollout: dict[int, set[int]], rollout_id: int) -> set[int]:
-    result: set[int] = set()
-    for rid, ids in zero_adv_witness_ids_by_rollout.items():
-        if rid <= rollout_id:
-            result |= ids
-    return result
+    return {
+        witness_id
+        for rid, ids in zero_adv_witness_ids_by_rollout.items()
+        if rid <= rollout_id
+        for witness_id in ids
+    }
 
 
 class _HasAttempt(Protocol):
