@@ -43,9 +43,12 @@ _HANG_VERDICT_TIMEOUT_S = 45.0
 _SETTLE_S = 3.0
 
 
-@ray.remote(num_gpus=1)
+@ray.remote(num_gpus=1, max_concurrency=2)
 class _MatrixWorker:
-    """One rank: holds a cell-internal PG and a cross-cell pair PG (NCCL + Gloo)."""
+    """One rank: holds a cell-internal PG and a cross-cell pair PG (NCCL + Gloo).
+
+    max_concurrency=2 so a liveness ``ping`` can run while another call blocks
+    (wedge methods still wedge: they simply never return)."""
 
     def setup(self, *, store_base: str, name: str, timeout_s: float) -> dict:
         import torch
@@ -101,7 +104,7 @@ class _MatrixWorker:
             x = x @ x
             x = x / x.norm()
 
-    def build_native_cell_pg(self, *, store_addr: str, long_timeout_s: float = 600.0) -> dict:
+    def build_native_cell_pg(self, *, store_addr: str, prefix: str, long_timeout_s: float = 600.0) -> dict:
         """Build a RAW c10d NCCL PG for the cell pair (no torchft wrapper, no
         userspace timeout) — mirrors Megatron's cell-internal comms in r2."""
         import torch
@@ -112,7 +115,9 @@ class _MatrixWorker:
         cell_rank = int(self._name[1])
         host, port = store_addr.split(":")
         store = TCPStore(host_name=host, port=int(port), is_master=False)
-        prefixed = dist.PrefixStore(f"native_cell_{self._name[0]}", store)
+        # Prefix must be unique per experiment: reusing one collides with the
+        # rendezvous records of a previous run's dead ranks (connection refused).
+        prefixed = dist.PrefixStore(f"{prefix}/native_cell_{self._name[0]}", store)
 
         opts = BaseProcessGroupNCCL.Options()
         opts._timeout = timedelta(seconds=long_timeout_s)
@@ -163,6 +168,44 @@ class _MatrixWorker:
             "elapsed_s": round(time.monotonic() - start, 2),
             "errored": str(self._cross_pg.errored())[:120],
         }
+
+    def blocked_wait_min1(self) -> dict:
+        """Exact r19 shape: enqueue a 1-element MIN allreduce on the cross pair
+        (collective_bool_and's exact op) whose peer never joins, then BLOCK in
+        wait(). torchft's _WorkAcceleratorTimeout fires abort() from its timer
+        thread while this thread is parked inside wait() — the r19 logs show
+        that abort's backing future timing out after 600s."""
+        import torch
+        import torch.distributed as dist
+
+        t = torch.tensor([1.0], dtype=torch.float32, device=self._device)
+        opts = dist.AllreduceOptions()
+        opts.reduceOp = dist.ReduceOp.MIN
+
+        errored_before = str(self._cross_pg.errored())[:80]
+        start = time.monotonic()
+        work = self._cross_pg.allreduce([t], opts)
+        enqueue_s = round(time.monotonic() - start, 3)
+        ok = None
+        err = None
+        try:
+            ok = work.wait()
+        except Exception as e:  # noqa: BLE001 - the expected abort/timeout error
+            err = f"{type(e).__name__}: {str(e)[:200]}"
+        return {
+            "name": self._name,
+            "work_type": type(work).__name__,
+            "errored_before": errored_before,
+            "enqueue_s": enqueue_s,
+            "wait_s": round(time.monotonic() - start, 2),
+            "ok": ok,
+            "err": err,
+            "errored_after": str(self._cross_pg.errored())[:80],
+        }
+
+    def ping(self) -> str:
+        """Liveness probe; runs on a second actor thread while another call blocks."""
+        return f"{self._name} alive at {time.monotonic():.1f}"
 
     def abort_cross(self, *, target: str) -> dict:
         """Abort this rank's cross-cell PG(s) like reconfigure_indep_dp_group does; time it."""
@@ -239,10 +282,45 @@ def _run_experiment(exp: str, *, store_base: str, store_hostport: str, timeout_s
             ref = workers["b1"].abort_cross.remote(target="both")
             return _await_abort(ref, workers=workers, expect="fast")
 
+        if exp.startswith("blocked_wait"):
+            # Exact r19 shape: peer wedged, then b1 BLOCKS in wait() on a
+            # 1-element MIN allreduce; torchft's timer thread aborts concurrently.
+            if "native" in exp:
+                ray.get(
+                    [
+                        workers[n].build_native_cell_pg.remote(store_addr=store_hostport, prefix=exp)
+                        for n in ("a0", "a1")
+                    ],
+                    timeout=60,
+                )
+                _fire_and_forget(workers["a1"].wedge_native_collective.remote())
+            else:
+                _fire_and_forget(workers["a1"].wedge_sleep.remote())
+            time.sleep(_SETTLE_S)
+            _fire_and_forget(workers["a0"].die.remote())
+            time.sleep(_SETTLE_S)
+
+            ref = workers["b1"].blocked_wait_min1.remote()
+            try:
+                out = ray.get(ref, timeout=timeout_s + _HANG_VERDICT_TIMEOUT_S)
+                return f"wait returned: {out} (expect: unblocked ~{timeout_s}s by timer abort)"
+            except ray.exceptions.GetTimeoutError:
+                probe = ray.get(workers["b1"].ping.remote(), timeout=10)
+                print(f"  blocked_wait STUCK; probe: {probe}; killing wedged a1")
+                ray.kill(workers["a1"], no_restart=True)
+                try:
+                    out = ray.get(ref, timeout=_HANG_VERDICT_TIMEOUT_S)
+                    return f"HUNG then UNBLOCKED by peer kill: {out}"
+                except ray.exceptions.GetTimeoutError:
+                    return f"HUNG and STILL STUCK {_HANG_VERDICT_TIMEOUT_S}s after peer kill"
+
         if exp.startswith("native_wedge"):
             # Cell A gets a RAW c10d NCCL PG; a1 wedges inside a real collective.
             ray.get(
-                [workers[n].build_native_cell_pg.remote(store_addr=store_hostport) for n in ("a0", "a1")],
+                [
+                    workers[n].build_native_cell_pg.remote(store_addr=store_hostport, prefix=exp)
+                    for n in ("a0", "a1")
+                ],
                 timeout=60,
             )
             _fire_and_forget(workers["a1"].wedge_native_collective.remote())
@@ -296,12 +374,10 @@ def main(
     store_base = f"{store_hostport}/abort_matrix"
 
     experiments = [
-        "torchft_form",
-        "r2_form",
-        "inflight_pre_timeout",
-        "inflight_post_timeout",
-        "native_wedge_idle",
-        "native_wedge_inflight",
+        "blocked_wait",
+        "blocked_wait_conn1",
+        "blocked_wait_native",
+        "blocked_wait_native_conn1",
         "native_wedge_inflight_conn1",
     ]
     if only is not None:
