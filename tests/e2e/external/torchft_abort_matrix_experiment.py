@@ -101,6 +101,69 @@ class _MatrixWorker:
             x = x @ x
             x = x / x.norm()
 
+    def build_native_cell_pg(self, *, store_addr: str, long_timeout_s: float = 600.0) -> dict:
+        """Build a RAW c10d NCCL PG for the cell pair (no torchft wrapper, no
+        userspace timeout) — mirrors Megatron's cell-internal comms in r2."""
+        import torch
+        import torch.distributed as dist
+        from torch.distributed import ProcessGroupNCCL as BaseProcessGroupNCCL
+        from torch.distributed import TCPStore
+
+        cell_rank = int(self._name[1])
+        host, port = store_addr.split(":")
+        store = TCPStore(host_name=host, port=int(port), is_master=False)
+        prefixed = dist.PrefixStore(f"native_cell_{self._name[0]}", store)
+
+        opts = BaseProcessGroupNCCL.Options()
+        opts._timeout = timedelta(seconds=long_timeout_s)
+        self._native_cell = BaseProcessGroupNCCL(prefixed, cell_rank, 2, opts)
+
+        t = torch.ones(8, device=self._device)
+        self._native_cell.allreduce([t]).wait()
+        return {"name": self._name, "native_warmup": float(t[0].item())}
+
+    def wedge_native_collective(self) -> None:
+        """Block forever inside a real NCCL collective whose peer never joins
+        (the peer is dead): a true wedged-in-collective state with a spinning
+        NCCL kernel, like r2's cell0 survivors."""
+        import torch
+
+        t = torch.ones(1024, device=self._device)
+        work = self._native_cell.allreduce([t])
+        work.wait()  # peer never participates; raw c10d with long timeout -> wedged
+
+    def start_inflight_cross_allreduce(self) -> dict:
+        """Enqueue a cross-pair allreduce WITHOUT waiting: the NCCL kernel sits
+        in-flight waiting for a peer that never joins. No wait() means torchft's
+        userspace timeout is never armed."""
+        import torch
+        import torch.distributed as dist
+
+        t = torch.ones(1 << 20, device=self._device)
+        opts = dist.AllreduceOptions()
+        opts.reduceOp = dist.ReduceOp.SUM
+        self._inflight_work = self._cross_pg.allreduce([t], opts)
+        self._inflight_tensor = t
+        return {"name": self._name, "inflight": True}
+
+    def wait_inflight_until_timeout(self) -> dict:
+        """wait() the in-flight work so torchft's userspace timeout fires and
+        aborts/errors the comm (the idiomatic detection path)."""
+        start = time.monotonic()
+        ok = None
+        err = None
+        try:
+            ok = self._inflight_work.wait()
+        except Exception as e:  # noqa: BLE001 - the expected timeout/abort error
+            err = f"{type(e).__name__}: {e}"
+        return {
+            "name": self._name,
+            "ok": ok,
+            "err": (err or "")[:200],
+            "elapsed_s": round(time.monotonic() - start, 2),
+            "errored": str(self._cross_pg.errored())[:120],
+        }
+
     def abort_cross(self, *, target: str) -> dict:
         """Abort this rank's cross-cell PG(s) like reconfigure_indep_dp_group does; time it."""
         groups = {
@@ -123,8 +186,9 @@ class _MatrixWorker:
         }
 
 
-def _spawn_cells(*, store_base: str, timeout_s: float) -> dict:
-    workers = {name: _MatrixWorker.remote() for name in ("a0", "a1", "b0", "b1")}
+def _spawn_cells(*, store_base: str, timeout_s: float, env_vars: dict | None = None) -> dict:
+    actor_cls = _MatrixWorker.options(runtime_env={"env_vars": env_vars}) if env_vars else _MatrixWorker
+    workers = {name: actor_cls.remote() for name in ("a0", "a1", "b0", "b1")}
     infos = ray.get(
         [w.setup.remote(store_base=store_base, name=name, timeout_s=timeout_s) for name, w in workers.items()],
         timeout=120,
@@ -162,9 +226,10 @@ def _await_abort(ref: object, *, workers: dict, expect: str) -> str:
         return f"HUNG and STILL STUCK {_HANG_VERDICT_TIMEOUT_S}s after peer kill (expect={expect})"
 
 
-def _run_experiment(exp: str, *, store_base: str, timeout_s: float) -> str:
+def _run_experiment(exp: str, *, store_base: str, store_hostport: str, timeout_s: float) -> str:
     print(f"== experiment {exp} ==")
-    workers = _spawn_cells(store_base=f"{store_base}/{exp}", timeout_s=timeout_s)
+    env_vars = {"CUDA_DEVICE_MAX_CONNECTIONS": "1"} if exp.endswith("_conn1") else None
+    workers = _spawn_cells(store_base=f"{store_base}/{exp}", timeout_s=timeout_s, env_vars=env_vars)
 
     try:
         if exp == "torchft_form":
@@ -173,6 +238,36 @@ def _run_experiment(exp: str, *, store_base: str, timeout_s: float) -> str:
             time.sleep(_SETTLE_S)
             ref = workers["b1"].abort_cross.remote(target="both")
             return _await_abort(ref, workers=workers, expect="fast")
+
+        if exp.startswith("native_wedge"):
+            # Cell A gets a RAW c10d NCCL PG; a1 wedges inside a real collective.
+            ray.get(
+                [workers[n].build_native_cell_pg.remote(store_addr=store_hostport) for n in ("a0", "a1")],
+                timeout=60,
+            )
+            _fire_and_forget(workers["a1"].wedge_native_collective.remote())
+            time.sleep(_SETTLE_S)
+            _fire_and_forget(workers["a0"].die.remote())
+            time.sleep(_SETTLE_S)
+            if "inflight" in exp:
+                # b1's cross allreduce kernel sits in-flight waiting for wedged a1.
+                _fire_and_forget(workers["b1"].start_inflight_cross_allreduce.remote())
+                time.sleep(_SETTLE_S)
+            ref = workers["b1"].abort_cross.remote(target="both")
+            return _await_abort(ref, workers=workers, expect="hang? (closest to r2)")
+
+        if exp.startswith("inflight"):
+            _fire_and_forget(workers["a1"].wedge_sleep.remote())
+            time.sleep(_SETTLE_S)
+            _fire_and_forget(workers["a0"].die.remote())
+            time.sleep(_SETTLE_S)
+            _fire_and_forget(workers["b1"].start_inflight_cross_allreduce.remote())
+            time.sleep(_SETTLE_S)
+            if exp == "inflight_post_timeout":
+                detect = ray.get(workers["b1"].wait_inflight_until_timeout.remote(), timeout=timeout_s + 60)
+                print(f"  post-timeout detect: {detect}")
+            ref = workers["b1"].abort_cross.remote(target="both")
+            return _await_abort(ref, workers=workers, expect="hang? (in-flight work variable)")
 
         wedge_method = "wedge_gpu_spin" if exp == "gpu_spin" else "wedge_sleep"
         target = {"locate_nccl": "nccl", "locate_gloo": "gloo"}.get(exp, "both")
@@ -197,15 +292,24 @@ def main(
     from torch.distributed import TCPStore
 
     store = TCPStore(host_name="localhost", port=0, is_master=True, wait_for_workers=False)
-    store_base = f"localhost:{store.port}/abort_matrix"
+    store_hostport = f"localhost:{store.port}"
+    store_base = f"{store_hostport}/abort_matrix"
 
-    experiments = ["torchft_form", "r2_form", "locate_nccl", "locate_gloo", "gpu_spin"]
+    experiments = [
+        "torchft_form",
+        "r2_form",
+        "inflight_pre_timeout",
+        "inflight_post_timeout",
+        "native_wedge_idle",
+        "native_wedge_inflight",
+        "native_wedge_inflight_conn1",
+    ]
     if only is not None:
         experiments = [only]
 
     results: dict[str, str] = {}
     for exp in experiments:
-        results[exp] = _run_experiment(exp, store_base=store_base, timeout_s=timeout_s)
+        results[exp] = _run_experiment(exp, store_base=store_base, store_hostport=store_hostport, timeout_s=timeout_s)
         print(f"RESULT {exp}: {results[exp]}\n")
         time.sleep(2)
 
