@@ -203,6 +203,46 @@ class _MatrixWorker:
             "errored_after": str(self._cross_pg.errored())[:80],
         }
 
+    def blocked_item_min1(self) -> dict:
+        """Exact collective_bool_and shape: 1-element MIN allreduce + tensor.item().
+
+        torchft's wait() is non-blocking (stream-ordered); the D2H sync in
+        .item() is where the MAIN THREAD parks inside cudaStreamSynchronize
+        waiting for the never-completing kernel. The userspace timer then calls
+        pg.abort() CONCURRENTLY with that synchronize — the suspected r19
+        deadlock pair."""
+        import torch
+        import torch.distributed as dist
+
+        t = torch.tensor([1.0], dtype=torch.float32, device=self._device)
+        opts = dist.AllreduceOptions()
+        opts.reduceOp = dist.ReduceOp.MIN
+
+        start = time.monotonic()
+        work = self._cross_pg.allreduce([t], opts)
+        wait_ok = work.wait()
+        wait_s = round(time.monotonic() - start, 3)
+        value = None
+        err = None
+        try:
+            value = t.item()  # blocks in D2H sync until kernel completes or abort
+        except Exception as e:  # noqa: BLE001 - the expected abort error
+            err = f"{type(e).__name__}: {str(e)[:200]}"
+        item_s = round(time.monotonic() - start, 2)
+
+        errored_start = time.monotonic()
+        errored_after = str(self._cross_pg.errored())[:80]
+        return {
+            "name": self._name,
+            "wait_ok": wait_ok,
+            "wait_s": wait_s,
+            "item_s": item_s,
+            "value": value,
+            "err": err,
+            "errored_after": errored_after,
+            "errored_probe_s": round(time.monotonic() - errored_start, 2),
+        }
+
     def ping(self) -> str:
         """Liveness probe; runs on a second actor thread while another call blocks."""
         return f"{self._name} alive at {time.monotonic():.1f}"
@@ -281,6 +321,38 @@ def _run_experiment(exp: str, *, store_base: str, store_hostport: str, timeout_s
             time.sleep(_SETTLE_S)
             ref = workers["b1"].abort_cross.remote(target="both")
             return _await_abort(ref, workers=workers, expect="fast")
+
+        if exp.startswith("blocked_item"):
+            # collective_bool_and shape: main thread parks in .item()'s D2H sync
+            # while the userspace timer aborts concurrently.
+            if "native" in exp:
+                ray.get(
+                    [
+                        workers[n].build_native_cell_pg.remote(store_addr=store_hostport, prefix=exp)
+                        for n in ("a0", "a1")
+                    ],
+                    timeout=60,
+                )
+                _fire_and_forget(workers["a1"].wedge_native_collective.remote())
+            else:
+                _fire_and_forget(workers["a1"].wedge_sleep.remote())
+            time.sleep(_SETTLE_S)
+            _fire_and_forget(workers["a0"].die.remote())
+            time.sleep(_SETTLE_S)
+
+            ref = workers["b1"].blocked_item_min1.remote()
+            try:
+                out = ray.get(ref, timeout=timeout_s + _HANG_VERDICT_TIMEOUT_S)
+                return f"item returned: {out} (expect: unblocked ~{timeout_s}s by timer abort, or HANG like r19)"
+            except ray.exceptions.GetTimeoutError:
+                probe = ray.get(workers["b1"].ping.remote(), timeout=10)
+                print(f"  blocked_item STUCK; probe: {probe}; killing wedged a1")
+                ray.kill(workers["a1"], no_restart=True)
+                try:
+                    out = ray.get(ref, timeout=_HANG_VERDICT_TIMEOUT_S)
+                    return f"HUNG then UNBLOCKED by peer kill: {out}"
+                except ray.exceptions.GetTimeoutError:
+                    return f"HUNG and STILL STUCK {_HANG_VERDICT_TIMEOUT_S}s after peer kill"
 
         if exp.startswith("blocked_wait"):
             # Exact r19 shape: peer wedged, then b1 BLOCKS in wait() on a
@@ -374,11 +446,10 @@ def main(
     store_base = f"{store_hostport}/abort_matrix"
 
     experiments = [
-        "blocked_wait",
-        "blocked_wait_conn1",
-        "blocked_wait_native",
-        "blocked_wait_native_conn1",
-        "native_wedge_inflight_conn1",
+        "blocked_item",
+        "blocked_item_conn1",
+        "blocked_item_native",
+        "blocked_item_native_conn1",
     ]
     if only is not None:
         experiments = [only]
