@@ -70,6 +70,70 @@ class _Worker:
         assert self._cross.allreduce([t], opts).wait(), f"{self._name}: warmup failed"
         return {"name": self._name, "use_abort": self._cross._use_abort}
 
+    def build_many_pgs(self, *, store_base: str, rank: int, timeout_s: float, k: int) -> dict:
+        """Build K torchft NCCL PGs in one process (mimics the survivor holding many
+        co-resident Megatron comms), each warmed up."""
+        import torch
+        import torch.distributed as dist
+        from torchft.process_group import ProcessGroupNCCL
+
+        self._pgs = []
+        opts = dist.AllreduceOptions()
+        opts.reduceOp = dist.ReduceOp.SUM
+        for i in range(k):
+            pg = ProcessGroupNCCL(timeout=timedelta(seconds=timeout_s))
+            pg.configure(store_addr=f"{store_base}/pg{i}", replica_id=self._name, rank=rank, world_size=2, quorum_id=0)
+            t = torch.ones(8, device=self._device)
+            assert pg.allreduce([t], opts).wait(), f"{self._name}: pg{i} warmup failed"
+            self._pgs.append(pg)
+        return {"name": self._name, "k": len(self._pgs)}
+
+    def enqueue_inflight_many(self, *, numel: int) -> dict:
+        import torch
+        import torch.distributed as dist
+
+        opts = dist.AllreduceOptions()
+        opts.reduceOp = dist.ReduceOp.SUM
+        self._inflight = []
+        for pg in self._pgs:
+            t = torch.ones(numel, device=self._device)
+            pg.allreduce([t], opts).wait()
+            self._inflight.append(t)
+        return {"name": self._name, "posted": len(self._inflight)}
+
+    def abort_many_concurrent(self) -> dict:
+        """Fire one abort() per PG, all started together at a barrier: many
+        concurrent abortComms contending NCCL/global teardown locks."""
+        n = len(self._pgs)
+        barrier = threading.Barrier(n)
+        results: list[float] = [0.0] * n
+        errs: list[str] = [""] * n
+
+        def _do(i: int) -> None:
+            barrier.wait()
+            t0 = time.monotonic()
+            try:
+                self._pgs[i].abort(errored=False)
+            except Exception as e:  # noqa: BLE001
+                errs[i] = f"{type(e).__name__}: {str(e)[:80]}"
+            results[i] = round(time.monotonic() - t0, 2)
+
+        threads = [threading.Thread(target=_do, args=(i,)) for i in range(n)]
+        start = time.monotonic()
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=_VERDICT_S)
+        alive = [i for i, th in enumerate(threads) if th.is_alive()]
+        return {
+            "name": self._name,
+            "k": n,
+            "total_s": round(time.monotonic() - start, 2),
+            "threads_still_alive": alive,
+            "max_thread_s": max(results),
+            "errs": [e for e in errs if e][:3],
+        }
+
     def die(self) -> None:
         os._exit(1)
 
@@ -129,17 +193,47 @@ class _Worker:
         return f"{self._name} alive at {time.monotonic():.1f}"
 
 
+def _try_ping(worker: object) -> str:
+    try:
+        return str(ray.get(worker.ping.remote(), timeout=10))
+    except Exception as e:  # noqa: BLE001
+        return f"ping failed: {type(e).__name__}"
+
+
 def _spawn(name: str) -> object:
     w = _Worker.options(runtime_env={"env_vars": dict(_REAL_RUN_ENV)}).remote()
     ray.get(w.init.remote(name=name), timeout=60)
     return w
 
 
-def _run(exp: str, *, store_base: str, timeout_s: float, numel: int) -> str:
+def _run(exp: str, *, store_base: str, timeout_s: float, numel: int, k: int) -> str:
     print(f"== experiment {exp} ==")
     surv = _spawn("S")
     peer = _spawn("W")
     try:
+        if exp == "many_comm":
+            base = f"{store_base}/{exp}"
+            ray.get(
+                [
+                    surv.build_many_pgs.remote(store_base=base, rank=0, timeout_s=timeout_s, k=k),
+                    peer.build_many_pgs.remote(store_base=base, rank=1, timeout_s=timeout_s, k=k),
+                ],
+                timeout=240,
+            )
+            print(f"  {k} PGs built + warmed on each side")
+            peer.wedge_sleep.remote()
+            time.sleep(_SETTLE_S)
+            ray.get(surv.enqueue_inflight_many.remote(numel=numel), timeout=60)
+            print(f"  peer wedged + survivor posted in-flight on all {k} PGs")
+            ref = surv.abort_many_concurrent.remote()
+            try:
+                out = ray.get(ref, timeout=_VERDICT_S + 30)
+                stuck = out.get("threads_still_alive")
+                return f"{'DEADLOCK (REPRODUCED)' if stuck else 'no deadlock'}: {out}"
+            except ray.exceptions.GetTimeoutError:
+                alive = _try_ping(surv)
+                return f"*** many_comm abort DEADLOCK >{_VERDICT_S + 30}s (REPRODUCED) *** ping={alive}"
+
         cross_store = f"{store_base}/{exp}/cross"
         ray.get(
             [
@@ -185,6 +279,7 @@ def _run(exp: str, *, store_base: str, timeout_s: float, numel: int) -> str:
 def main(
     timeout_s: Annotated[float, typer.Option(help="torchft cross PG timeout")] = 120.0,
     numel: Annotated[int, typer.Option(help="in-flight cross allreduce size")] = 1 << 22,
+    k: Annotated[int, typer.Option(help="number of co-resident PGs for many_comm")] = 16,
     only: Annotated[str | None, typer.Option(help="run a single experiment")] = None,
 ) -> None:
     """Run the concurrent-abort deadlock reproduction matrix."""
@@ -194,13 +289,13 @@ def main(
     store = TCPStore(host_name="localhost", port=0, is_master=True, wait_for_workers=False)
     store_base = f"localhost:{store.port}/concurrent_abort"
 
-    experiments = ["single_abort", "double_abort", "double_abort_clean"]
+    experiments = ["single_abort", "double_abort", "double_abort_clean", "many_comm"]
     if only is not None:
         experiments = [only]
 
     results: dict[str, str] = {}
     for exp in experiments:
-        results[exp] = _run(exp, store_base=store_base, timeout_s=timeout_s, numel=numel)
+        results[exp] = _run(exp, store_base=store_base, timeout_s=timeout_s, numel=numel, k=k)
         print(f"RESULT {exp}: {results[exp]}\n")
         time.sleep(3)
 
