@@ -25,6 +25,15 @@ class DumperPhase(enum.Enum):
     FWD_BWD = "fwd_bwd"
 
 
+# Module-level latch (per process) recording which phases have already wiped
+# their parent dump directory. The class is rebuilt every train step, so this
+# state cannot live on the instance. The FIRST configure of a phase wipes the
+# whole {dumper_dir}/{phase}/ parent dir (clearing stale rollouts left by a
+# previous run with a different step count); subsequent rollouts only clean and
+# recreate their own rollout_{id} subdirectory.
+_PHASES_PARENT_WIPED: set[DumperPhase] = set()
+
+
 # ------------------------------- SGLang -------------------------------------
 
 
@@ -80,10 +89,18 @@ async def configure_sglang(args: Namespace) -> None:
 
 
 class DumperMegatronUtil:
-    def __init__(self, args: Namespace, model: Sequence[torch.nn.Module], phase: DumperPhase) -> None:
+    def __init__(
+        self,
+        args: Namespace,
+        model: Sequence[torch.nn.Module],
+        phase: DumperPhase,
+        *,
+        rollout_id: int,
+    ) -> None:
         self.phase = phase
+        self.rollout_id = rollout_id
         self.overrides = _get_phase_override_configs(args, phase)
-        self.enabled = self._configure(args, phase, self.overrides)
+        self.enabled = self._configure(args, phase=phase, rollout_id=rollout_id, overrides=self.overrides)
         if self.enabled:
             dumper.register_non_intrusive_dumper(self._extract_model(model))
 
@@ -115,15 +132,25 @@ class DumperMegatronUtil:
         return model[0]
 
     @staticmethod
-    def _configure(args: Namespace, phase: DumperPhase, overrides: dict[str, Any] | None = None) -> bool:
+    def _configure(
+        args: Namespace,
+        *,
+        phase: DumperPhase,
+        rollout_id: int,
+        overrides: dict[str, Any] | None = None,
+    ) -> bool:
         if overrides is None:
             overrides = _get_phase_override_configs(args, phase)
         if not overrides.get("enable"):
             return False
 
+        # One subdirectory per miles rollout. The dumper's internal step counter
+        # keeps its microbatch semantics (untouched); the rollout dimension is
+        # expressed by the directory layout instead.
+        exp_name = f"{phase.value}/rollout_{rollout_id}"
         merged = {
             "dir": str(_get_dir(args)),
-            "exp_name": phase.value,
+            "exp_name": exp_name,
             "enable_output_console": False,
             **overrides,
         }
@@ -139,6 +166,14 @@ class DumperMegatronUtil:
 
         full_config = DumperConfig(**merged)
         dumper.reset()
+        # First configure of a phase in this process wipes the whole
+        # {dumper_dir}/{phase}/ parent dir, removing stale rollouts left by a
+        # previous run (e.g. last run had 6 rollouts, this one has 4 — the
+        # extra 2 would otherwise pollute comparison). Subsequent rollouts only
+        # clean/recreate their own subdirectory below.
+        if phase not in _PHASES_PARENT_WIPED:
+            _PHASES_PARENT_WIPED.add(phase)
+            _cleanup_dump_dir(Path(merged["dir"]) / phase.value)
         _cleanup_dump_dir(Path(merged["dir"]) / merged["exp_name"])
         dumper.configure(**dataclasses.asdict(full_config))
         return True
