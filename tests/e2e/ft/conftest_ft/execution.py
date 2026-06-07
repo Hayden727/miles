@@ -122,11 +122,12 @@ def get_common_train_args(
 
     dumper_args = ""
     if enable_dumper:
-        only_first_step = "only_first_step=1 " if dumper_only_first_step else ""
+        only_first_step = "--dumper-fwd-bwd-only-first-step " if dumper_only_first_step else ""
         dumper_args = (
             f"--dumper-dir {dump_dir}/dumps "
             f"--dumper-fwd-bwd enable=1 enable_model_value=1 enable_model_grad=1 "
-            f"include_parallel_rank_in_filename=1 {only_first_step}"
+            f"include_parallel_rank_in_filename=1 "
+            f"{only_first_step}"
             f"--dumper-source-patcher-config-train {_MEGATRON_SOURCE_PATCHER_CONFIG_PATH} "
         )
 
