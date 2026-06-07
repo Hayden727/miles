@@ -177,7 +177,6 @@ def _filter_to_latest_attempt(
     *,
     group_key: Callable[[_EventWithAttemptT], Hashable],
 ) -> list[_EventWithAttemptT]:
-    """Keep only events whose attempt equals the max attempt within their group."""
     max_attempt_by_group: dict[Hashable, int] = {}
     for event in events:
         key = group_key(event)
