@@ -5,6 +5,7 @@ import io
 import subprocess
 import sys
 import textwrap
+import threading
 import warnings
 
 import pytest
@@ -176,6 +177,32 @@ class TestLinePrefixingStream:
         """Attribute access falls through to the wrapped stream (e.g. getvalue)."""
         sink = io.StringIO()
         assert self._wrap(sink).getvalue() == ""
+
+    def test_writelines_prefixes_each_line(self):
+        """writelines is routed through write so its lines are prefixed too."""
+        sink = io.StringIO()
+        self._wrap(sink).writelines(["a\n", "b\n"])
+        assert sink.getvalue() == "[TAG] a\n[TAG] b\n"
+
+    def test_concurrent_writes_do_not_interleave(self):
+        """Each whole-line write stays intact under concurrent writers (RLock)."""
+        sink = io.StringIO()
+        stream = self._wrap(sink)
+        num_threads, lines_per_thread = 8, 200
+        payloads = [f"t{tid}-{j}" for tid in range(num_threads) for j in range(lines_per_thread)]
+
+        def writer(tid: int) -> None:
+            for j in range(lines_per_thread):
+                stream.write(f"t{tid}-{j}\n")
+
+        threads = [threading.Thread(target=writer, args=(tid,)) for tid in range(num_threads)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        lines = sink.getvalue().splitlines()
+        assert sorted(lines) == sorted(f"[TAG] {payload}" for payload in payloads)
 
 
 class TestInstallRayActorLogPrefix:

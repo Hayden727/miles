@@ -3,8 +3,9 @@ import logging
 import os
 import re
 import sys
+import threading
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TextIO
 
 _LOGGER_CONFIGURED = False
@@ -99,24 +100,32 @@ class LinePrefixingStream:
         self._underlying = underlying
         self._build_prefix = build_prefix
         self._at_line_start = True
+        # Reentrant so writelines() can hold the lock while delegating to write().
+        self._lock = threading.RLock()
 
     def write(self, text: str) -> int:
         if not text:
             return 0
 
-        segments = text.split("\n")
-        for index, segment in enumerate(segments):
-            is_last = index == len(segments) - 1
-            if segment and self._at_line_start:
-                self._underlying.write(f"[{self._build_prefix()}] ")
-                self._at_line_start = False
-            if segment:
-                self._underlying.write(segment)
-            if not is_last:
-                self._underlying.write("\n")
-                self._at_line_start = True
+        with self._lock:
+            segments = text.split("\n")
+            for index, segment in enumerate(segments):
+                is_last = index == len(segments) - 1
+                if segment and self._at_line_start:
+                    self._underlying.write(f"[{self._build_prefix()}] ")
+                    self._at_line_start = False
+                if segment:
+                    self._underlying.write(segment)
+                if not is_last:
+                    self._underlying.write("\n")
+                    self._at_line_start = True
 
         return len(text)
+
+    def writelines(self, lines: Iterable[str]) -> None:
+        with self._lock:
+            for line in lines:
+                self.write(line)
 
     def flush(self) -> None:
         self._underlying.flush()
