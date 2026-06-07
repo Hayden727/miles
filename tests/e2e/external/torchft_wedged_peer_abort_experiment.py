@@ -82,8 +82,9 @@ class _Worker:
     def build_native_cell_pg(self, *, store_addr: str, rank: int, long_timeout_s: float = 3600.0) -> dict:
         """RAW c10d NCCL PG for the W<->D 'cell' (no torchft timer): the wedge medium."""
         import torch
-        from torch.distributed import PrefixStore, TCPStore
+        from torch.distributed import PrefixStore
         from torch.distributed import ProcessGroupNCCL as BaseProcessGroupNCCL
+        from torch.distributed import TCPStore
 
         host, port = store_addr.split(":")
         store = TCPStore(host_name=host, port=int(port), is_master=False)
