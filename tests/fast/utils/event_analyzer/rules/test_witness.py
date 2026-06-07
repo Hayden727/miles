@@ -454,3 +454,50 @@ class TestZeroAdvantageExclusion:
             _make_step_end(rollout_id=1, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
         ]
         assert check(events) == []
+
+    def test_zero_advantage_id_three_lives_alternating(self) -> None:
+        """An id alternating zero/nonzero/zero advantage across three allocations is excused, required, then excused again."""
+        events: list[Event] = [
+            _make_allocate(rollout_id=0, witness_id_to_sample_index={0: 0}),
+            _make_advantage(rollout_id=0, advantages=[[0.0]], witness_ids=[[0]]),
+            _make_snapshot(rollout_id=0, nonzero_witness_ids=[]),
+            _make_step_end(rollout_id=0, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
+            _make_allocate(rollout_id=1, witness_id_to_sample_index={0: 1}),
+            _make_advantage(rollout_id=1, advantages=[[5.0]], witness_ids=[[0]]),
+            _make_snapshot(rollout_id=1, nonzero_witness_ids=[0]),
+            _make_step_end(rollout_id=1, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
+            _make_allocate(rollout_id=2, witness_id_to_sample_index={0: 2}),
+            _make_advantage(rollout_id=2, advantages=[[0.0]], witness_ids=[[0]]),
+            _make_snapshot(rollout_id=2, nonzero_witness_ids=[]),
+            _make_step_end(rollout_id=2, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
+        ]
+        assert check(events) == []
+
+    def test_zero_advantage_id_reuse_cancellation_applies_per_cell(self) -> None:
+        """After reuse with nonzero adv the id is required on every cell — missing on one cell is flagged."""
+        events: list[Event] = [
+            _make_allocate(rollout_id=0, witness_id_to_sample_index={0: 0}),
+            _make_advantage(rollout_id=0, advantages=[[0.0]], witness_ids=[[0]], cell_index=0),
+            _make_snapshot(rollout_id=0, nonzero_witness_ids=[], cell_index=0),
+            _make_snapshot(rollout_id=0, nonzero_witness_ids=[], cell_index=1),
+            _make_step_end(rollout_id=0, cell_outcomes={0: [TrainStepOutcome.NORMAL], 1: [TrainStepOutcome.NORMAL]}),
+            _make_allocate(rollout_id=1, witness_id_to_sample_index={0: 1}),  # id 0 reused after wrap
+            _make_advantage(rollout_id=1, advantages=[[5.0]], witness_ids=[[0]], cell_index=0),
+            _make_snapshot(rollout_id=1, nonzero_witness_ids=[0], cell_index=0),
+            _make_snapshot(rollout_id=1, nonzero_witness_ids=[], cell_index=1),  # missing on cell 1
+            _make_step_end(rollout_id=1, cell_outcomes={0: [TrainStepOutcome.NORMAL], 1: [TrainStepOutcome.NORMAL]}),
+        ]
+        issues = check(events)
+        assert len(issues) == 1
+        assert issues[0].rollout_id == 1
+        assert issues[0].cell_index == 1
+
+    def test_zero_advantage_id_never_allocated_has_no_effect(self) -> None:
+        """A zero-adv observation for an id that was never allocated neither excuses nor expects anything."""
+        events: list[Event] = [
+            _make_allocate(rollout_id=0, witness_id_to_sample_index={10: 0}),
+            _make_advantage(rollout_id=0, advantages=[[5.0], [0.0]], witness_ids=[[10], [99]]),
+            _make_snapshot(rollout_id=0, nonzero_witness_ids=[10]),
+            _make_step_end(rollout_id=0, cell_outcomes={0: [TrainStepOutcome.NORMAL]}),
+        ]
+        assert check(events) == []
