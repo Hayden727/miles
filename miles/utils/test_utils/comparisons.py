@@ -28,14 +28,6 @@ def compare_dumps(
     phase_subdir: str | None = None,
     extra_args: list[str] | None = None,
 ) -> None:
-    # The comparator's auto_descend_dir descends exactly one level into a sole
-    # subdirectory that contains .pt files. With the legacy flat layout
-    # ({dir}/dumps/fwd_bwd/*.pt) passing {dir}/dumps lets it auto-descend into
-    # fwd_bwd. With the per-rollout layout ({dir}/dumps/fwd_bwd/rollout_N/*.pt)
-    # the fwd_bwd level holds multiple rollout_* subdirs, which auto_descend
-    # rejects as ambiguous; callers must then point at the exact rollout via
-    # phase_subdir (e.g. "fwd_bwd/rollout_1"). phase_subdir defaults to None,
-    # preserving the legacy behavior for dumps without a per-rollout structure.
     subdir = phase_subdir or ""
     baseline_path = Path(baseline_dir) / "dumps" / subdir
     target_path = Path(target_dir) / "dumps" / subdir

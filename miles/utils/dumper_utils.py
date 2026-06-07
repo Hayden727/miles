@@ -25,12 +25,6 @@ class DumperPhase(enum.Enum):
     FWD_BWD = "fwd_bwd"
 
 
-# Module-level latch (per process) recording which phases have already wiped
-# their parent dump directory. The class is rebuilt every train step, so this
-# state cannot live on the instance. The FIRST configure of a phase wipes the
-# whole {dumper_dir}/{phase}/ parent dir (clearing stale rollouts left by a
-# previous run with a different step count); subsequent rollouts only clean and
-# recreate their own rollout_{id} subdirectory.
 _PHASES_PARENT_WIPED: set[DumperPhase] = set()
 
 
@@ -144,9 +138,6 @@ class DumperMegatronUtil:
         if not overrides.get("enable"):
             return False
 
-        # One subdirectory per miles rollout. The dumper's internal step counter
-        # keeps its microbatch semantics (untouched); the rollout dimension is
-        # expressed by the directory layout instead.
         exp_name = f"{phase.value}/rollout_{rollout_id}"
         merged = {
             "dir": str(_get_dir(args)),
@@ -166,11 +157,6 @@ class DumperMegatronUtil:
 
         full_config = DumperConfig(**merged)
         dumper.reset()
-        # First configure of a phase in this process wipes the whole
-        # {dumper_dir}/{phase}/ parent dir, removing stale rollouts left by a
-        # previous run (e.g. last run had 6 rollouts, this one has 4 — the
-        # extra 2 would otherwise pollute comparison). Subsequent rollouts only
-        # clean/recreate their own subdirectory below.
         if phase not in _PHASES_PARENT_WIPED:
             _PHASES_PARENT_WIPED.add(phase)
             _cleanup_dump_dir(Path(merged["dir"]) / phase.value)
