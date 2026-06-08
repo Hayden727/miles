@@ -17,14 +17,18 @@ from miles.utils.test_utils.comparisons import (
 NUM_PHASE_A_STEPS: int = 1
 NUM_PHASE_B_STEPS: int = 4
 
-# Per-tensor pass predicates. Only starved near-zero MoE expert grads diverge under
-# the recovery-rebuilt collective's reduction order (observed grad__...mlp.experts.*,
-# max_abs ~1e-5..4e-4, set varies run-to-run -> FP noise; weights bit-identical). So
-# expert grads also tolerate max_abs <= 1e-3 (well below real grads ~1e-2); a real
-# expert diff still fails, and everything else stays strict via the catch-all
-# (required: an unmatched tensor is a fail-closed error).
+# Per-tensor pass predicates. A few specific near-zero grads diverge under the
+# crash-recovery (solo / degraded-quorum) collective's reduction order while their
+# weights stay bit-identical:
+#   - starved MoE expert grads (grad__...mlp.experts.*), max_abs ~1e-5..4e-4;
+#   - attention k_layernorm grads (grad__...k_layernorm.*), measured rel ~1.2-1.5%,
+#     max_abs_diff ~2.3e-4, failing layer varies per rollout -> FP noise.
+# Both are cancellation-dominated near-zero grads, so they also tolerate
+# max_abs <= 1e-3 (well below real grads ~1e-2): a real diff there still fails, and
+# everything else stays strict via the catch-all (an unmatched tensor is fail-closed).
 _DIFF_THRESHOLDS: list[tuple[str, str]] = [
     (r"grad__.*\.mlp\.experts\..*", "rel <= 0.0085 or max_abs <= 1e-3"),
+    (r"grad__.*\.k_layernorm\..*", "rel <= 0.0085 or max_abs <= 1e-3"),
     (".*", "rel <= 0.0085"),
 ]
 
