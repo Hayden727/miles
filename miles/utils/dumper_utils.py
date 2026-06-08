@@ -120,9 +120,7 @@ class DumperMegatronUtil:
             get_grad = _build_full_grad_getter(extracted_model)
 
         # Weights/grads are a once-per-rollout end-state, so pin them to step 0 instead of
-        # the running per-microbatch step. Otherwise a crashed/healed rollout (more
-        # microbatches on the surviving cell) lands them at a higher step than baseline's
-        # step 0 and the dump comparison misaligns.
+        # the running per-microbatch step.
         dumper.dump_model(extracted_model, get_grad=get_grad, step=0)
         dumper.step()
         dumper.configure(enable=False)
