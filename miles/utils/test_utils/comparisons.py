@@ -27,6 +27,7 @@ def compare_dumps(
     allow_skipped_pattern: str,
     allow_failed_pattern: str,
     phase_subdir: str | None = None,
+    grouping_skip_keys: list[str] | None = None,
     extra_args: list[str] | None = None,
 ) -> None:
     subdir = phase_subdir or ""
@@ -71,6 +72,7 @@ def compare_dumps(
             allow_skipped_pattern=allow_skipped_pattern,
             allow_failed_pattern=allow_failed_pattern,
             final_step=final_step,
+            grouping_skip_keys=grouping_skip_keys,
             extra_args=extra_args,
         )
         if result.returncode != 0:
@@ -300,16 +302,20 @@ def _run_comparator(
     allow_skipped_pattern: str,
     allow_failed_pattern: str,
     final_step: int | None = None,
+    grouping_skip_keys: list[str] | None = None,
     extra_args: list[str] | None,
 ) -> subprocess.CompletedProcess[str]:
     # Skip 'rank' when grouping bundles: under FT (target) and non-FT (baseline) the same
     # logical (pp_rank, cp_rank, ep_rank, tp_rank) coordinate maps to a different absolute
     # rank ID (e.g. baseline rank=4 vs target cell0 rank=2 for PP=1, CP=0). Without skipping
     # 'rank' the comparator gets `baseline_load_failed` for every tensor and fails with rc=1.
-    # When restricting to a final FT-retry step (below), also skip 'step': the target's final
-    # attempt lands at a higher step than baseline's single attempt, so step must not be a
-    # grouping key. (Grouping is a comparator-matching detail, not a pass/fail threshold.)
-    grouping_skip_keys: list[str] = ["rank"] if final_step is None else ["rank", "step"]
+    # Callers may pass extra keys (e.g. no_failure skips 'dp'/'edp' too). When restricting to
+    # a final FT-retry step (below), also skip 'step': the target's final attempt lands at a
+    # higher step than baseline's single attempt, so step must not be a grouping key.
+    # (Grouping is a comparator-matching detail, not a pass/fail threshold.)
+    skip_keys: list[str] = list(grouping_skip_keys) if grouping_skip_keys is not None else ["rank"]
+    if final_step is not None and "step" not in skip_keys:
+        skip_keys.append("step")
 
     cmd: list[str] = [
         sys.executable,
@@ -322,7 +328,7 @@ def _run_comparator(
         "--output-format",
         "json",
         "--grouping-skip-keys",
-        *grouping_skip_keys,
+        *skip_keys,
         "--allow-skipped-pattern",
         allow_skipped_pattern,
         "--allow-failed-pattern",
