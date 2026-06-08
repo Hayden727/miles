@@ -31,19 +31,6 @@ def allocate_gpus_for_actor(
         **args.train_env_vars,
     }
 
-    if args.use_fault_tolerance:
-        # On an FT rejoin a freshly respawned cell must cuModuleLoad its compiled triton
-        # kernels into a cold CUDA context on the first forward. With CUDA's default lazy
-        # module loading that load is deferred to the kernel's first launch -- which on the
-        # rejoin path is interleaved with an in-flight cross-cell NCCL collective; the lazy
-        # load then serializes against the spinning collective kernel and deadlocks (proven
-        # via py-spy: stuck in triton _init_handles / static_triton_launcher.load_kernel,
-        # while cuda-gdb shows a ncclDevKernel_AllReduce spinning on the same device, peer
-        # waiting on this rank). Eager module loading resolves cubins at compile time, before
-        # any collective launch, so the rejoin forward never blocks on a lazy load. Set via
-        # Ray runtime_env so it applies before CUDA initializes.
-        env_vars.setdefault("CUDA_MODULE_LOADING", "EAGER")
-
     if source_patcher_config := args.dumper_source_patcher_config_train:
         env_vars["DUMPER_SOURCE_PATCHER_CONFIG"] = source_patcher_config
 
