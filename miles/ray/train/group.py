@@ -305,6 +305,13 @@ class RayTrainGroup:
         if not needs_reconfigure:
             return
 
+        # Step 0.5: Kill any errored cells and confirm their processes are gone
+        # BEFORE the surviving cells reconfigure. Aborting an indep_dp NCCL comm
+        # whose remote peer is still a live (wedged) process blocks until that
+        # peer dies (the 600s abort hang); a confirmed-dead peer makes the abort
+        # return immediately. We accept losing the errored actors' stack traces.
+        await self._kill_errored_cells_and_confirm_dead()
+
         # Step 1: Bump states
         self._indep_dp_quorum_id += 1
 
@@ -347,6 +354,14 @@ class RayTrainGroup:
 
         if not AsyncioGatherUtils.has_error(coop_prepare_outputs):
             assert [c.cell_index for c in self._cells if c.is_alive] == will_alive_indices
+
+    async def _kill_errored_cells_and_confirm_dead(self) -> None:
+        errored_cells = [c for c in self._cells if c.is_errored]
+        if not errored_cells:
+            return
+
+        logger.info(f"Killing errored cells before reconfigure: {[c.cell_index for c in errored_cells]}")
+        await asyncio.gather(*[c.stop_and_confirm_dead() for c in errored_cells])
 
     def _compute_indep_dp_info(self, cell_index: int, alive_cell_indices: list[int]) -> IndepDPInfo:
         return IndepDPInfo(

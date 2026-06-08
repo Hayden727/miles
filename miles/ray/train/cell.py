@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 ActorFactory = Callable[[], list[ray.actor.ActorHandle]]
 
+# Generous backstop only; ray.kill SIGKILLs the worker so a follow-up call
+# surfaces RayActorError near-instantly. We never want confirmation to itself
+# become an unbounded wait.
+_CONFIRM_DEAD_TIMEOUT_S = 120.0
+
 
 class RayTrainCell:
     def __init__(
@@ -118,6 +123,23 @@ class RayTrainCell:
                 ray.kill(actor)
 
         self._change_state("stop", (StatePending, StateAllocatedBase), StateStopped())
+
+    async def stop_and_confirm_dead(self) -> None:
+        """Kill all actors and block until their OS processes are confirmed gone.
+
+        Required before a surviving cell reconfigures its indep_dp PG: aborting an
+        NCCL comm whose remote peer is still a live (wedged) process blocks until
+        that peer dies (the 600s abort hang). Killing the peer and confirming it
+        is gone first makes the subsequent abort hit a dead comm and return at once.
+        """
+        if self.is_stopped:
+            return
+
+        handles = self._get_actor_handles() if self.is_allocated else []
+        self.stop()
+
+        for handle in handles:
+            await _confirm_actor_dead(handle)
 
     def mark_as_pending(self) -> None:
         if self.is_pending or self.is_allocated:
@@ -239,3 +261,19 @@ class RayTrainCell:
             self._state, StateAllocatedBase
         ), f"Cell {self.cell_index} is not allocated (state={type(self._state).__name__})"
         return self._state.actor_handles
+
+
+async def _confirm_actor_dead(handle: ray.actor.ActorHandle) -> None:
+    """Block until a follow-up call on the killed actor surfaces RayActorError."""
+
+    async def _ping() -> None:
+        await handle.__ray_ready__.remote()
+
+    try:
+        await asyncio.wait_for(_ping(), timeout=_CONFIRM_DEAD_TIMEOUT_S)
+    except (ray.exceptions.RayActorError, ray.exceptions.RayTaskError):
+        return
+    except (TimeoutError, asyncio.TimeoutError):
+        logger.error("Timed out after %.0fs confirming actor death; proceeding anyway", _CONFIRM_DEAD_TIMEOUT_S)
+        return
+    raise RuntimeError("Actor responded after ray.kill — expected it to be dead")
