@@ -155,15 +155,6 @@ _TRAINER_FT_ENV_VARS: dict[str, str] = {
     "MILES_EXPERIMENTAL_FT_TRAINER": "1",
 }
 
-# Disable NVLink-SHARP (NVLS). NVLS engages only for large collectives and allocates/registers
-# multicast buffers per comm; on the FT rejoin path a freshly respawned cell's large MoE
-# expert-parallel all_to_all hangs on first real use (tiny warmup alltoall on the same comm
-# completes; a continuously-running cell is fine), matching an NVLS-setup race on the fresh
-# process. Applied to both baseline and target so they stay numerically consistent.
-_DISABLE_NVLS_ENV_VARS: dict[str, str] = {
-    "NCCL_NVLS_ENABLE": "0",
-}
-
 
 def run_training(
     train_args: str,
@@ -174,12 +165,7 @@ def run_training(
 ) -> None:
     if dump_dir is not None and os.path.exists(dump_dir):
         shutil.rmtree(dump_dir)
-    merged_env_vars = {
-        **_DETERMINISTIC_ENV_VARS,
-        **_TRAINER_FT_ENV_VARS,
-        **_DISABLE_NVLS_ENV_VARS,
-        **(extra_env_vars or {}),
-    }
+    merged_env_vars = {**_DETERMINISTIC_ENV_VARS, **_TRAINER_FT_ENV_VARS, **(extra_env_vars or {})}
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=mode.train_gpus_per_node,
