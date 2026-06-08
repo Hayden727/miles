@@ -24,12 +24,6 @@ logger = logging.getLogger(__name__)
 
 ActorFactory = Callable[[], list[ray.actor.ActorHandle]]
 
-# ray.kill SIGKILLs the worker so a probe surfaces RayActorError near-instantly,
-# but the kill is asynchronous: we poll until the probe errors (process gone),
-# with a generous overall backstop so confirmation never becomes an unbounded wait.
-_CONFIRM_DEAD_TIMEOUT_S = 120.0
-_CONFIRM_DEAD_PROBE_INTERVAL_S = 1.0
-
 
 class RayTrainCell:
     def __init__(
@@ -258,20 +252,23 @@ class RayTrainCell:
 
 
 async def _confirm_actor_dead(handle: ray.actor.ActorHandle) -> None:
+    CONFIRM_DEAD_TIMEOUT_S = 120.0
+    CONFIRM_DEAD_PROBE_INTERVAL_S = 1.0
+
     async def _probe() -> None:
         await handle.__ray_ready__.remote()
 
-    deadline = time.monotonic() + _CONFIRM_DEAD_TIMEOUT_S
+    deadline = time.monotonic() + CONFIRM_DEAD_TIMEOUT_S
     while True:
         try:
-            await asyncio.wait_for(_probe(), timeout=_CONFIRM_DEAD_PROBE_INTERVAL_S)
+            await asyncio.wait_for(_probe(), timeout=CONFIRM_DEAD_PROBE_INTERVAL_S)
         except (ray.exceptions.RayActorError, ray.exceptions.RayTaskError):
             return
         except (TimeoutError, asyncio.TimeoutError):
             pass
 
         if time.monotonic() >= deadline:
-            logger.error("Timed out after %.0fs confirming actor death; proceeding anyway", _CONFIRM_DEAD_TIMEOUT_S)
+            logger.error("Timed out after %.0fs confirming actor death; proceeding anyway", CONFIRM_DEAD_TIMEOUT_S)
             return
 
-        await asyncio.sleep(_CONFIRM_DEAD_PROBE_INTERVAL_S)
+        await asyncio.sleep(CONFIRM_DEAD_PROBE_INTERVAL_S)
