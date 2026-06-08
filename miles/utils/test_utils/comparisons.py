@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -49,12 +50,27 @@ def compare_dumps(
 
     failed_leaves: list[str] = []
     for leaf in baseline_leaves:
+        # FT retries re-run a rollout in the same process: the failed attempt leaves
+        # partial dumps at a lower dumper step and the successful (final) attempt lands
+        # at the highest step. Compare only the final attempt against baseline's single
+        # clean attempt -- the dump analog of compare_metrics._keep_only_final_attempt.
+        target_steps = _distinct_dump_steps(target_root / leaf)
+        final_step: int | None = None
+        if len(target_steps) > 1:
+            baseline_steps = _distinct_dump_steps(baseline_root / leaf)
+            assert len(baseline_steps) == 1, (
+                f"Baseline leaf {leaf} unexpectedly holds multiple dump steps "
+                f"{sorted(baseline_steps)}; baseline has no FT retries (one attempt)."
+            )
+            final_step = max(target_steps)
+
         result = _run_comparator(
             baseline_path=baseline_root / leaf,
             target_path=target_root / leaf,
             diff_thresholds=diff_thresholds,
             allow_skipped_pattern=allow_skipped_pattern,
             allow_failed_pattern=allow_failed_pattern,
+            final_step=final_step,
             extra_args=extra_args,
         )
         if result.returncode != 0:
@@ -77,6 +93,16 @@ def _find_leaf_dump_dirs(root: Path) -> list[str]:
     """
     leaves: set[str] = {str(p.parent.relative_to(root)) for p in root.rglob("*.pt")}
     return sorted(leaves)
+
+
+def _distinct_dump_steps(leaf_dir: Path) -> set[int]:
+    """Distinct dumper ``step`` values among the .pt files directly in ``leaf_dir``."""
+    steps: set[int] = set()
+    for p in leaf_dir.glob("*.pt"):
+        m = re.search(r"step=(\d+)", p.name)
+        if m:
+            steps.add(int(m.group(1)))
+    return steps
 
 
 def compare_metrics(
@@ -273,8 +299,18 @@ def _run_comparator(
     diff_thresholds: list[tuple[str, str]],
     allow_skipped_pattern: str,
     allow_failed_pattern: str,
+    final_step: int | None = None,
     extra_args: list[str] | None,
 ) -> subprocess.CompletedProcess[str]:
+    # Skip 'rank' when grouping bundles: under FT (target) and non-FT (baseline) the same
+    # logical (pp_rank, cp_rank, ep_rank, tp_rank) coordinate maps to a different absolute
+    # rank ID (e.g. baseline rank=4 vs target cell0 rank=2 for PP=1, CP=0). Without skipping
+    # 'rank' the comparator gets `baseline_load_failed` for every tensor and fails with rc=1.
+    # When restricting to a final FT-retry step (below), also skip 'step': the target's final
+    # attempt lands at a higher step than baseline's single attempt, so step must not be a
+    # grouping key. (Grouping is a comparator-matching detail, not a pass/fail threshold.)
+    grouping_skip_keys: list[str] = ["rank"] if final_step is None else ["rank", "step"]
+
     cmd: list[str] = [
         sys.executable,
         "-m",
@@ -285,19 +321,18 @@ def _run_comparator(
         str(target_path),
         "--output-format",
         "json",
-        # Skip 'rank' when grouping bundles: under FT (target) and non-FT (baseline)
-        # the same logical (pp_rank, cp_rank, ep_rank, tp_rank) coordinate maps to a
-        # different absolute rank ID (e.g. baseline rank=4 vs target cell0 rank=2 for
-        # PP=1, CP=0). Without skipping 'rank' the comparator gets `baseline_load_failed`
-        # for every tensor and fails with rc=1. (Grouping is a comparator-matching
-        # detail, not a per-test pass/fail threshold; callers add extras via extra_args.)
         "--grouping-skip-keys",
-        "rank",
+        *grouping_skip_keys,
         "--allow-skipped-pattern",
         allow_skipped_pattern,
         "--allow-failed-pattern",
         allow_failed_pattern,
     ]
+    if final_step is not None:
+        # _read_df filters only the target side by step; restrict it to the final attempt
+        # so the failed attempt's partial dumps are dropped. Baseline (single attempt) is
+        # unfiltered and aligns via the skipped 'step' grouping key above.
+        cmd.extend(["--start-step", str(final_step), "--end-step", str(final_step)])
     if extra_args:
         cmd.extend(extra_args)
     # Keep --diff-threshold strictly last: its nargs="*" greedily consumes every
