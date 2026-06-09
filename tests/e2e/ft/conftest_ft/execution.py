@@ -182,6 +182,8 @@ def run_training(
         **_TRAINER_FT_ENV_VARS,
         **_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS,
         "MILES_SANITY_INDEPDP": "1",  # DIAG (uncommitted): sanity all_reduce(ones) over indep_dp each grad-reduce
+        "NCCL_DEBUG": "INFO",  # DIAG (uncommitted): see reconfigured comm nranks
+        "NCCL_DEBUG_SUBSYS": "INIT",  # DIAG (uncommitted): limit NCCL_DEBUG to comm-init messages
         **(extra_env_vars or {}),
     }
     U.execute_train(
