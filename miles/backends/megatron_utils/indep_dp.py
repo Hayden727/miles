@@ -137,7 +137,8 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
         _s = torch.ones(1, device="cuda")
         util.all_reduce(_s, pg, op=dist.ReduceOp.SUM)
         logger.warning(
-            "INDEPDP_SANITY size=%s rank=%s all_reduce(ones)=%s (expect alive_size)",
+            "INDEPDP_SANITY mr=%s size=%s rank=%s all_reduce(ones)=%s (expect alive_size)",
+            dist.get_rank(),
             parallel_state.indep_dp.size,
             parallel_state.indep_dp.rank,
             _s.item(),

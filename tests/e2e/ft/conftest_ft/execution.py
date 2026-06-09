@@ -182,6 +182,7 @@ def run_training(
         **_TRAINER_FT_ENV_VARS,
         **_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS,
         "MILES_SANITY_INDEPDP": "1",  # DIAG (uncommitted): sanity all_reduce(ones) over indep_dp each grad-reduce
+        "RAY_DEDUP_LOGS": "0",  # DIAG (uncommitted): disable Ray log dedup for reliable per-rank diagnostics
         **(extra_env_vars or {}),
     }
     U.execute_train(
