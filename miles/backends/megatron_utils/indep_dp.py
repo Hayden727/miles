@@ -46,9 +46,18 @@ def create_indep_dp_group(
         )
         return pg
 
-    nccl_pg = _create(ProcessGroupNCCL, "nccl")
+    # Create the gloo PG first and synchronize all alive cells BEFORE the NCCL rendezvous.
+    # torchft's NCCL PG is nonblocking (opts.config.blocking=False) and eager-connects, so if
+    # the cells reach NCCL init at different times (e.g. the healing cell is slower to rebuild
+    # after a rejoin) the comm forms single-member (nranks=1, confirmed via NCCL_DEBUG) and
+    # every cross-cell collective silently no-ops -- the rejoin-step gradient/metric reduction
+    # is then skipped and a wrong (un-reduced) gradient is applied. A blocking gloo all_reduce
+    # gates the NCCL rendezvous until every alive cell is present, so the NCCL comm forms with
+    # all members. This is always entered collectively by all alive cells (alive_size > 1) and
+    # cannot deadlock on a mid-crash peer (crashed cells are killed before this reconfigure).
     gloo_pg = _create(ProcessGroupGloo, "gloo")
-    _establish_collective_comm(nccl_pg=nccl_pg, gloo_pg=gloo_pg, indep_dp_info=indep_dp_info)
+    _barrier_via_gloo(gloo_pg)
+    nccl_pg = _create(ProcessGroupNCCL, "nccl")
     logger.info(
         f"Configured independent DP PG: {indep_dp_info}, "
         f"megatron_rank={megatron_rank}, megatron_world_size={megatron_world_size}"
@@ -56,26 +65,10 @@ def create_indep_dp_group(
     return GroupInfo(rank=indep_dp_info.alive_rank, size=indep_dp_info.alive_size, group=nccl_pg, gloo_group=gloo_pg)
 
 
-def _establish_collective_comm(
-    *, nccl_pg: dist.ProcessGroup, gloo_pg: dist.ProcessGroup, indep_dp_info: IndepDPInfo
-) -> None:
-    """Force the freshly-configured cross-cell NCCL communicator to form with all members.
-
-    torchft forms a degraded single-member NCCL comm if the cells reach the first collective
-    at different times (e.g. after a rejoin where the healing cell is slower to initialize).
-    The checkpoint transfer uses point-to-point, which masks this; the first all_reduce then
-    silently no-ops (each cell reduces with itself), so the cross-cell gradient/metric
-    reduction at the rejoin step is skipped and a wrong (un-reduced) gradient is applied.
-
-    A blocking gloo all_reduce synchronizes all alive cells, then a warmup NCCL all_reduce
-    forms the collective comm with every member present. This runs only when alive_size > 1
-    and is always entered collectively by all alive cells, so it cannot deadlock on a peer
-    that is mid-crash (crashed cells are killed before this reconfigure).
-    """
+def _barrier_via_gloo(gloo_pg: dist.ProcessGroup) -> None:
     import torch
 
     GeneralPGUtil.create(gloo_pg).all_reduce(torch.ones(1), gloo_pg, op=dist.ReduceOp.SUM)
-    GeneralPGUtil.create(nccl_pg).all_reduce(torch.ones(1, device="cuda"), nccl_pg, op=dist.ReduceOp.SUM)
 
 
 def reconfigure_indep_dp_group(
