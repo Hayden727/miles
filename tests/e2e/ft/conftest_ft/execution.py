@@ -155,6 +155,19 @@ _TRAINER_FT_ENV_VARS: dict[str, str] = {
     "MILES_EXPERIMENTAL_FT_TRAINER": "1",
 }
 
+# Workaround for a freshly-respawned cell deterministically wedging in its first
+# forward after a crash+rejoin: on NCCL 2.28.x a small RING_LL AllReduce hangs when
+# cuMem/NVLS resources are reallocated on the reused GPUs (NVLS alloc can silently
+# fall back on only some ranks -> deadlock; fixed upstream in NCCL 2.29). Forcing the
+# Simple protocol and disabling cuMem/NVLS avoids the affected path. The freshly-built
+# comms are otherwise healthy (verified by hammering them in isolation).
+_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS: dict[str, str] = {
+    "NCCL_PROTO": "Simple",
+    "NCCL_CUMEM_ENABLE": "0",
+    "NCCL_CUMEM_HOST_ENABLE": "0",
+    "NCCL_NVLS_ENABLE": "0",
+}
+
 
 def run_training(
     train_args: str,
@@ -165,7 +178,12 @@ def run_training(
 ) -> None:
     if dump_dir is not None and os.path.exists(dump_dir):
         shutil.rmtree(dump_dir)
-    merged_env_vars = {**_DETERMINISTIC_ENV_VARS, **_TRAINER_FT_ENV_VARS, **(extra_env_vars or {})}
+    merged_env_vars = {
+        **_DETERMINISTIC_ENV_VARS,
+        **_TRAINER_FT_ENV_VARS,
+        **_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS,
+        **(extra_env_vars or {}),
+    }
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=mode.train_gpus_per_node,
