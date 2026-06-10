@@ -74,10 +74,13 @@ async def run(
     try:
         response = await asyncio.wait_for(
             post(f"{agent_server_url}/run", request),
-            timeout=3600,  # 1 hour max per trial
+            timeout=14400,  # 4 hours max per trial; must exceed the agent
+            # server's own trial timeout (task.toml timeout_sec x
+            # HARBOR_TIMEOUT_MULTIPLIER + setup/verifier), otherwise the
+            # session is deleted while the container agent still runs.
         )
     except asyncio.TimeoutError:
-        logger.error("Agent server call timed out after 3600s")
+        logger.error("Agent server call timed out after 14400s")
         return None
     except asyncio.CancelledError:
         logger.warning("Agent server call cancelled (sibling task failure?)")
