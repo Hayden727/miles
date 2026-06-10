@@ -16,12 +16,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Args to recreate the current cross-cell comm, set only by reconfigure_indep_dp_group. A
-# reconfigured (post-recovery) comm degrades to single-member during the compute-interleaved
-# forward (an NCCL 2.28 issue, not a timeout -- it degrades even well within the comm timeout), so
-# maybe_refresh_reconfigured_comm recreates it before each reduction. The initial comm is never
-# degraded and is never recreated, which also keeps its short crash-recovery timeout intact.
-_INDEP_DP_RECREATE_ARGS: dict | None = None
+# Set once a reconfigure (post-crash recovery) has happened. A reconfigured cross-cell NCCL comm
+# degrades to single-member during the compute-interleaved forward (NCCL 2.28); recreating it per
+# step desyncs the store rendezvous and SIGABRTs the intra-cell NCCL watchdog. So after a reconfigure
+# the cross-cell reductions run over the CPU gloo PG instead (it does not degrade and needs no
+# rendezvous). The initial comm is never degraded, so pre-crash/crash steps keep the fast NCCL path.
+_INDEP_DP_RECONFIGURED: bool = False
+
+
+def _indep_dp_was_reconfigured() -> bool:
+    return _INDEP_DP_RECONFIGURED
+
+
+def _cross_cell_all_reduce(util: GeneralPGUtil, tensor, pg: dist.ProcessGroup, use_gloo: bool) -> None:
+    """Sum-reduce ``tensor`` across cells. Over gloo (post-reconfigure) the tensor is staged on CPU,
+    since gloo cannot reduce CUDA tensors; otherwise reduce in place over NCCL."""
+    if use_gloo:
+        host = tensor.to("cpu")
+        util.all_reduce(host, pg, op=dist.ReduceOp.SUM)
+        tensor.copy_(host.to(tensor.device))
+    else:
+        util.all_reduce(tensor, pg, op=dist.ReduceOp.SUM)
 
 
 def create_indep_dp_group(
@@ -30,7 +45,6 @@ def create_indep_dp_group(
     megatron_rank: int,
     megatron_world_size: int,
     timeout_s: float = 120,
-    reuse_gloo: "dist.ProcessGroup | None" = None,
 ) -> GroupInfo:
     if indep_dp_info.alive_size <= 1:
         return GroupInfo(rank=0, size=1, group=None)
@@ -75,11 +89,7 @@ def create_indep_dp_group(
     # gates the NCCL rendezvous until every alive cell is present, so the NCCL comm forms with
     # all members. This is always entered collectively by all alive cells (alive_size > 1) and
     # cannot deadlock on a mid-crash peer (crashed cells are killed before this reconfigure).
-    # Recreating the gloo PG on every post-recovery reduction leaks CPU memory and churns the store
-    # (it crashed the actor with an OOM/EOF). The gloo PG is CPU-based and does NOT degrade during
-    # the GPU forward, so callers that only need to refresh the corrupted NCCL comm pass the existing
-    # gloo PG via reuse_gloo to keep it across recreations.
-    gloo_pg = reuse_gloo if reuse_gloo is not None else _create(ProcessGroupGloo, "gloo")
+    gloo_pg = _create(ProcessGroupGloo, "gloo")
     _barrier_via_gloo(gloo_pg)
     nccl_pg = _create(ProcessGroupNCCL, "nccl")
     if __import__("os").environ.get("MILES_SANITY_INDEPDP"):
@@ -125,94 +135,37 @@ def reconfigure_indep_dp_group(
         if g is not None:
             g.abort(errored=False)
 
-    # A reconfigured comm is always created during recovery, where a cell that just respawned runs a
-    # cold torch.compile of its first forward (~180-300s, variable) while the survivor waits on this
-    # comm. Use a long timeout so that wait cannot expire (which would silently degrade the comm to
-    # single-member and apply an un-reduced gradient). Only the initial comm (create_indep_dp_group's
-    # short default) needs the fast timeout that makes a crash recoverable -- crashes happen during
-    # normal training on the initial comm, never on a reconfigured one mid-recovery.
+    # Longer timeout than the initial comm: this rendezvous + the subsequent recv_ckpt happen while a
+    # cell is still respawning (process start + model build), so the survivor waits here.
     parallel_state.indep_dp = create_indep_dp_group(
         store_addr=store_addr,
         indep_dp_info=indep_dp_info,
         megatron_rank=megatron_rank,
         megatron_world_size=megatron_world_size,
-        timeout_s=1500,
+        timeout_s=300,
     )
-    global _INDEP_DP_RECREATE_ARGS
-    _INDEP_DP_RECREATE_ARGS = dict(
-        store_addr=store_addr,
-        indep_dp_info=indep_dp_info,
-        megatron_rank=megatron_rank,
-        megatron_world_size=megatron_world_size,
-    )
+    # Mark that a reconfigure has happened: from now on the cross-cell reductions use the gloo PG,
+    # because the reconfigured NCCL comm degrades during the forward (see _INDEP_DP_RECONFIGURED).
+    global _INDEP_DP_RECONFIGURED
+    _INDEP_DP_RECONFIGURED = True
     logger.info(f"Reconfigured indep_dp PG with quorum_id={indep_dp_info.quorum_id}")
 
 
-def maybe_refresh_reconfigured_comm(parallel_state: ParallelState, rollout_id: int, attempt: int) -> None:
-    """Recreate a reconfigured cross-cell comm right before it is used for a reduction.
-
-    A reconfigured comm degrades to single-member during the compute-interleaved forward (NCCL 2.28;
-    verified not a timeout -- it degrades even when the step is well within the comm timeout), which
-    would silently skip the cross-cell gradient/metric reduction and apply an un-reduced gradient. A
-    freshly-created comm survives a single reduction, so recreate it here; the step's later metric
-    all_reduce reuses this fresh comm too (no forward runs in between). The store sub-key is derived
-    from controller-synced (quorum_id, rollout_id, attempt) so all alive cells rendezvous on the same
-    key. Only reconfigured comms are refreshed (the initial comm is never degraded). The long timeout
-    tolerates a respawned cell still finishing its (cache-warmed ~120s) recompile.
-    """
-    args = _INDEP_DP_RECREATE_ARGS
-    if args is None:
-        return
-
-    old = parallel_state.indep_dp
-    quorum_id = args["indep_dp_info"].quorum_id
-    # Reuse the persistent gloo PG (CPU, does not degrade) and recreate ONLY the NCCL comm. Creating
-    # a fresh gloo every step leaked memory and crashed the actor (OOM/EOF) after several rejoins.
-    fresh = create_indep_dp_group(
-        store_addr=f"{args['store_addr']}/recreate/{quorum_id}_{rollout_id}_{attempt}",
-        indep_dp_info=args["indep_dp_info"],
-        megatron_rank=args["megatron_rank"],
-        megatron_world_size=args["megatron_world_size"],
-        timeout_s=1500,
-        reuse_gloo=old.gloo_group,
-    )
-
-    parallel_state.indep_dp = fresh
-    # Abort only the old NCCL comm; the gloo PG is reused (kept alive in `fresh`). Then free the
-    # aborted comm's references promptly so repeated rejoins do not accumulate GPU/CPU memory.
-    if old.group is not None:
-        old.group.abort(errored=False)
-    import gc
-
-    gc.collect()
-
-
-def _allreduce_grads_across_replicas(
-    args, model: Sequence["DDP"], parallel_state: ParallelState, rollout_id: int, attempt: int
-) -> bool:
+def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_state: ParallelState) -> bool:
     assert not args.calculate_per_token_loss, "calculate_per_token_loss is not supported with indep_dp yet"
     assert parallel_state.intra_dp.size == 1, (
         f"indep_dp requires intra_dp.size == 1, got {parallel_state.intra_dp.size}. "
         "Simultaneous intra and indep DP is not supported."
     )
 
-    maybe_refresh_reconfigured_comm(parallel_state, rollout_id, attempt)
-
-    pg = parallel_state.indep_dp.group
+    # A reconfigured (post-rejoin) NCCL comm degrades to single-member during the compute-interleaved
+    # forward (NCCL 2.28), and recreating it per step desyncs the store rendezvous and SIGABRTs the
+    # intra-cell NCCL watchdog. The gloo PG is CPU-based, does not degrade, and needs no per-step
+    # rendezvous, so reduce cross-cell over gloo once a reconfigure has occurred. The initial comm is
+    # never degraded, so the pre-crash/crash steps keep the fast NCCL path.
+    use_gloo = _indep_dp_was_reconfigured()
+    pg = parallel_state.indep_dp.gloo_group if use_gloo else parallel_state.indep_dp.group
     util = GeneralPGUtil.create(pg)
-
-    if __import__("os").environ.get("MILES_SANITY_INDEPDP"):
-        import torch
-
-        _s = torch.ones(1, device="cuda")
-        util.all_reduce(_s, pg, op=dist.ReduceOp.SUM)
-        logger.warning(
-            "INDEPDP_SANITY mr=%s size=%s rank=%s all_reduce(ones)=%s (expect alive_size)",
-            dist.get_rank(),
-            parallel_state.indep_dp.size,
-            parallel_state.indep_dp.rank,
-            _s.item(),
-        )
 
     allreduce_success = True
     try:
@@ -220,12 +173,12 @@ def _allreduce_grads_across_replicas(
             # mimic: DistributedDataParallel.start_grad_sync
             for bucket_group in model_chunk.bucket_groups + model_chunk.expert_parallel_bucket_groups:
                 for bucket in bucket_group.buckets:
-                    util.all_reduce(bucket.grad_data, pg, op=dist.ReduceOp.SUM)
+                    _cross_cell_all_reduce(util, bucket.grad_data, pg, use_gloo)
     except Exception:
         allreduce_success = False
         logger.exception("Gradient allreduce across replicas failed")
 
-    if (e := pg.errored()) is not None:
+    if not use_gloo and (e := pg.errored()) is not None:
         allreduce_success = False
         logger.error("indep_dp PG has async error: %s", e)
 
