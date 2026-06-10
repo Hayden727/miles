@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Args to recreate the current cross-cell comm, set only by reconfigure_indep_dp_group. A
+# reconfigured (post-recovery) comm degrades to single-member during the compute-interleaved
+# forward (an NCCL 2.28 issue, not a timeout -- it degrades even well within the comm timeout), so
+# maybe_refresh_reconfigured_comm recreates it before each reduction. The initial comm is never
+# degraded and is never recreated, which also keeps its short crash-recovery timeout intact.
+_INDEP_DP_RECREATE_ARGS: dict | None = None
+
 
 def create_indep_dp_group(
     store_addr: str | None,
@@ -126,15 +133,58 @@ def reconfigure_indep_dp_group(
         megatron_world_size=megatron_world_size,
         timeout_s=900,
     )
+    global _INDEP_DP_RECREATE_ARGS
+    _INDEP_DP_RECREATE_ARGS = dict(
+        store_addr=store_addr,
+        indep_dp_info=indep_dp_info,
+        megatron_rank=megatron_rank,
+        megatron_world_size=megatron_world_size,
+    )
     logger.info(f"Reconfigured indep_dp PG with quorum_id={indep_dp_info.quorum_id}")
 
 
-def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_state: ParallelState) -> bool:
+def maybe_refresh_reconfigured_comm(parallel_state: ParallelState, rollout_id: int, attempt: int) -> None:
+    """Recreate a reconfigured cross-cell comm right before it is used for a reduction.
+
+    A reconfigured comm degrades to single-member during the compute-interleaved forward (NCCL 2.28;
+    verified not a timeout -- it degrades even when the step is well within the comm timeout), which
+    would silently skip the cross-cell gradient/metric reduction and apply an un-reduced gradient. A
+    freshly-created comm survives a single reduction, so recreate it here; the step's later metric
+    all_reduce reuses this fresh comm too (no forward runs in between). The store sub-key is derived
+    from controller-synced (quorum_id, rollout_id, attempt) so all alive cells rendezvous on the same
+    key. Only reconfigured comms are refreshed (the initial comm is never degraded). The long timeout
+    tolerates a respawned cell still finishing its (cache-warmed ~120s) recompile.
+    """
+    args = _INDEP_DP_RECREATE_ARGS
+    if args is None:
+        return
+
+    old = parallel_state.indep_dp
+    quorum_id = args["indep_dp_info"].quorum_id
+    fresh = create_indep_dp_group(
+        store_addr=f"{args['store_addr']}/recreate/{quorum_id}_{rollout_id}_{attempt}",
+        indep_dp_info=args["indep_dp_info"],
+        megatron_rank=args["megatron_rank"],
+        megatron_world_size=args["megatron_world_size"],
+        timeout_s=900,
+    )
+
+    parallel_state.indep_dp = fresh
+    for g in [old.group, old.gloo_group]:
+        if g is not None:
+            g.abort(errored=False)
+
+
+def _allreduce_grads_across_replicas(
+    args, model: Sequence["DDP"], parallel_state: ParallelState, rollout_id: int, attempt: int
+) -> bool:
     assert not args.calculate_per_token_loss, "calculate_per_token_loss is not supported with indep_dp yet"
     assert parallel_state.intra_dp.size == 1, (
         f"indep_dp requires intra_dp.size == 1, got {parallel_state.intra_dp.size}. "
         "Simultaneous intra and indep DP is not supported."
     )
+
+    maybe_refresh_reconfigured_comm(parallel_state, rollout_id, attempt)
 
     pg = parallel_state.indep_dp.group
     util = GeneralPGUtil.create(pg)
