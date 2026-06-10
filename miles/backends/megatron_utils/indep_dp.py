@@ -27,7 +27,7 @@ def create_indep_dp_group(
     megatron_rank: int,
     megatron_world_size: int,
     recreate_tag: str = "",
-    timeout_s: float = 120,
+    timeout_s: float = 600,
 ) -> GroupInfo:
     if indep_dp_info.alive_size <= 1:
         return GroupInfo(rank=0, size=1, group=None)
@@ -133,32 +133,21 @@ def maybe_refresh_reconfigured_comm(parallel_state: ParallelState, rollout_id: i
         return
 
     old = parallel_state.indep_dp
-
-    # Synchronize all alive cells on the persistent gloo group BEFORE recreating. The gloo group
-    # is CPU-based and survives the GPU forward pass that corrupts the NCCL comm, so this barrier
-    # makes every cell reach the new comm's store rendezvous together -- avoiding the transient
-    # cross-cell desync (one cell still finishing its first post-rejoin forward) that otherwise
-    # blocks the rendezvous past the heartbeat watchdog or leaves it single-member.
     quorum_id = args["indep_dp_info"].quorum_id
-    if old.gloo_group is not None:
-        import torch
 
-        _b = torch.ones(1)
-        GeneralPGUtil.create(old.gloo_group).all_reduce(_b, old.gloo_group, op=dist.ReduceOp.SUM)
-        if __import__("os").environ.get("MILES_SANITY_INDEPDP"):
-            logger.warning(
-                "INDEPDP_GLOO_BARRIER mr=%s q=%s rollout=%s gloo_ar=%s (expect alive_size)",
-                dist.get_rank(),
-                quorum_id,
-                rollout_id,
-                _b.item(),
-            )
+    # The recreate's store rendezvous must wait for every alive cell. A cell that respawned at this
+    # quorum is still running a cold torch.compile of its first forward (observed ~122s) and reaches
+    # this point much later than the survivor, so a short comm timeout would expire and error the
+    # survivor (cascading to all-cells-dead). Use a generous timeout that comfortably exceeds the
+    # recompile; the trainer heartbeat is bumped from a background thread, so this wait does not trip
+    # the watchdog, and a genuinely dead peer is still caught by the heartbeat checker.
     fresh = create_indep_dp_group(
         store_addr=args["store_addr"],
         indep_dp_info=args["indep_dp_info"],
         megatron_rank=args["megatron_rank"],
         megatron_world_size=args["megatron_world_size"],
         recreate_tag=f"/recreate/{quorum_id}_{rollout_id}_{attempt}",
+        timeout_s=600,
     )
 
     parallel_state.indep_dp = fresh
