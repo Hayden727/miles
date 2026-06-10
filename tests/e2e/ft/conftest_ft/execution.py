@@ -138,15 +138,15 @@ def get_common_train_args(
 
 
 def get_ft_args(mode: FTTestMode) -> str:
-    # Even with the shared compile cache, a respawned cell's first forward takes ~180s, during which
-    # the survivor waits on the cross-cell collective. Ordering recompile(~180s) < comm_timeout(240s)
-    # < heartbeat(300s) keeps the comm alive through that step (no degraded/un-reduced gradient)
-    # while a genuine crash still times out and recovers before the survivor is declared dead.
+    # The survivor blocks on the cross-cell collective while a respawned cell does its cold
+    # recompile (~180-300s, variable), so raise the heartbeat age well above that wait (default 90s)
+    # to avoid declaring the waiting-but-alive survivor dead. Crash detection stays fast because the
+    # quorum_0 comm uses a short timeout (see create_indep_dp_group).
     return (
         "--use-fault-tolerance "
         "--ft-components train "
         "--control-server-port 0 "
-        "--trainer-heartbeat-checker-max-heartbeat-age 300 "
+        "--trainer-heartbeat-checker-max-heartbeat-age 600 "
     )
 
 
