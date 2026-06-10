@@ -146,7 +146,7 @@ def get_ft_args(mode: FTTestMode) -> str:
         "--use-fault-tolerance "
         "--ft-components train "
         "--control-server-port 0 "
-        "--trainer-heartbeat-checker-max-heartbeat-age 600 "
+        "--trainer-heartbeat-checker-max-heartbeat-age 1500 "
     )
 
 

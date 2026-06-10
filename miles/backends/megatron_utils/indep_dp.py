@@ -131,7 +131,7 @@ def reconfigure_indep_dp_group(
         indep_dp_info=indep_dp_info,
         megatron_rank=megatron_rank,
         megatron_world_size=megatron_world_size,
-        timeout_s=900,
+        timeout_s=1500,
     )
     global _INDEP_DP_RECREATE_ARGS
     _INDEP_DP_RECREATE_ARGS = dict(
@@ -166,7 +166,7 @@ def maybe_refresh_reconfigured_comm(parallel_state: ParallelState, rollout_id: i
         indep_dp_info=args["indep_dp_info"],
         megatron_rank=args["megatron_rank"],
         megatron_world_size=args["megatron_world_size"],
-        timeout_s=900,
+        timeout_s=1500,
     )
 
     parallel_state.indep_dp = fresh
