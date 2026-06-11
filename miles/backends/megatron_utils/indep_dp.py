@@ -86,8 +86,6 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
 
     pg = parallel_state.indep_dp.group
     util = GeneralPGUtil.create(pg)
-    cell_rank = parallel_state.indep_dp.rank
-    expected_members = parallel_state.indep_dp.size
 
     allreduce_success = True
     try:
@@ -99,10 +97,9 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
     except Exception:
         allreduce_success = False
         logger.exception(
-            "indep_dp cross-cell gradient allreduce raised (cell_rank=%d, expected_members=%d); "
-            "discarding this step's grads",
-            cell_rank,
-            expected_members,
+            "indep_dp cross-cell gradient allreduce raised (cell_rank=%d, expected_members=%d)",
+            parallel_state.indep_dp.rank,
+            parallel_state.indep_dp.size,
         )
 
     # pg.errored() can force a CUDA/stream sync, so call it exactly once per step here -- do NOT
@@ -111,10 +108,9 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
     if (e := pg.errored()) is not None:
         allreduce_success = False
         logger.error(
-            "indep_dp cross-cell PG async error (cell_rank=%d, expected_members=%d): %s; "
-            "discarding this step's grads",
-            cell_rank,
-            expected_members,
+            "indep_dp cross-cell PG async error (cell_rank=%d, expected_members=%d): %s",
+            parallel_state.indep_dp.rank,
+            parallel_state.indep_dp.size,
             e,
         )
 
