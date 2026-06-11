@@ -16,6 +16,25 @@ _MEGATRON_SOURCE_PATCHER_CONFIG_PATH: Path = _RUN_DIR / "megatron_source_patcher
 _MEGATRON_PATH: str = os.environ.get("MILES_SCRIPT_MEGATRON_PATH", "/root/Megatron-LM")
 _MODEL_DIR: str = os.environ.get("MILES_SCRIPT_MODEL_DIR", "/root/models")
 _DATA_DIR: str = os.environ.get("MILES_SCRIPT_DATA_DIR", "/root/datasets")
+_DEBUG_ROLLOUT_DATA_DIR: str = f"{_DATA_DIR}/{DEBUG_ROLLOUT_DATA_HF_REPO.split('/')[-1]}"
+
+
+def materialize_cyclic_debug_rollout_data(count: int) -> str:
+    """Symlink the recorded debug rollouts cyclically into a fresh temp dir as 0.pt..{count-1}.pt.
+
+    The recorded set is finite (one .pt per rollout). A soak that runs more steps than there are
+    files (e.g. the random-failure test) needs one file per rollout_id; the rollout content is
+    irrelevant to what a soak asserts (FT survival across crashes), so we reuse the files cyclically.
+    Doing it here (test fixture) keeps the production load path (load_debug_rollout_data) unchanged.
+    """
+    src = Path(_DEBUG_ROLLOUT_DATA_DIR)
+    available = sorted(int(p.stem) for p in src.glob("*.pt") if p.stem.isdigit())
+    if not available:
+        raise FileNotFoundError(f"No debug rollout data files found in {src}")
+    dst = Path(tempfile.mkdtemp(prefix="ft_cyclic_rollout_"))
+    for i in range(count):
+        (dst / f"{i}.pt").symlink_to(src / f"{available[i % len(available)]}.pt")
+    return str(dst)
 
 
 def _get_hf_num_layers(model_path: str) -> int:
@@ -48,7 +67,12 @@ def prepare(mode: FTTestMode) -> None:
 
 
 def get_common_train_args(
-    mode: FTTestMode, *, dump_dir: str, num_steps: int | None = None, enable_dumper: bool = True
+    mode: FTTestMode,
+    *,
+    dump_dir: str,
+    num_steps: int | None = None,
+    enable_dumper: bool = True,
+    debug_rollout_data_dir: str | None = None,
 ) -> str:
     ckpt_args = (
         f"--hf-checkpoint {_MODEL_DIR}/{mode.model_name} " f"--ref-load {_MODEL_DIR}/{mode.model_name}_torch_dist "
@@ -67,9 +91,10 @@ def get_common_train_args(
 
     rollout_args: str
     if not mode.has_real_rollout:
+        rollout_dir = debug_rollout_data_dir or _DEBUG_ROLLOUT_DATA_DIR
         rollout_args = (
             f"--prompt-data {_DATA_DIR}/gsm8k/train.parquet "
-            f"--load-debug-rollout-data {_DATA_DIR}/miles-test-rollout-Qwen3-30B-A3B-5layer/{{rollout_id}}.pt "
+            f"--load-debug-rollout-data {rollout_dir}/{{rollout_id}}.pt "
             "--debug-train-only "
             "--rollout-batch-size 32 "
             "--n-samples-per-prompt 8 "

@@ -11,7 +11,13 @@ import requests
 import typer
 
 from tests.e2e.ft.conftest_ft.app import resolve_dump_dir
-from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args, prepare, run_training
+from tests.e2e.ft.conftest_ft.execution import (
+    get_common_train_args,
+    get_ft_args,
+    materialize_cyclic_debug_rollout_data,
+    prepare,
+    run_training,
+)
 from tests.e2e.ft.conftest_ft.modes import FTTestMode, resolve_mode
 
 from miles.utils.test_utils.fault_injector import FailureMode
@@ -123,8 +129,13 @@ def run_ci(
 
     prepare(ft_mode)
 
+    # The recorded debug rollouts are fewer than the soak's step count; symlink them cyclically
+    # into a temp dir so each rollout_id has a file, keeping the production load path unchanged.
+    cyclic_data_dir = materialize_cyclic_debug_rollout_data(num_steps)
     train_args = (
-        get_common_train_args(ft_mode, dump_dir=dump_dir, num_steps=num_steps)
+        get_common_train_args(
+            ft_mode, dump_dir=dump_dir, num_steps=num_steps, debug_rollout_data_dir=cyclic_data_dir
+        )
         + get_ft_args(ft_mode)
         + f"--control-server-port {_CONTROL_SERVER_PORT} "
         + "--mini-ft-controller-enable "
