@@ -8,9 +8,9 @@ import ray
 from ray.util.placement_group import PlacementGroup
 
 from miles.backends.megatron_utils.types import TrainStepOutcome
+from miles.ray.rollout.rollout_manager import health_monitoring_paused
 from miles.ray.train.actor_factory import allocate_gpus_for_actor
 from miles.ray.train.cell import RayTrainCell
-from miles.ray.rollout.rollout_manager import health_monitoring_paused
 from miles.ray.train.cell_monitor import create_trainer_cell_health_checker
 from miles.utils.async_utils import AsyncioGatherUtils
 from miles.utils.event_analyzer.analyzer import run_analysis_from_args
