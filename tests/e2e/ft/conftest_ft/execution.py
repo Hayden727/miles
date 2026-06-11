@@ -173,19 +173,21 @@ _TRAINER_FT_ENV_VARS: dict[str, str] = {
     "MILES_EXPERIMENTAL_FT_TRAINER": "1",
 }
 
-# Debug-only passthrough: forward selected diagnostic env vars from the test launcher's
-# environment to the training actors (NCCL_DEBUG* for comm traces, MILES_FT_DEBUG_* for
-# env-gated probes such as the indep_dp membership probe, RAY_DEDUP_LOGS=0 so Ray does not
-# collapse identical per-rank log lines into "[repeated Nx]"). No-op when none are set.
-_DEBUG_ENV_PASSTHROUGH_PREFIXES: tuple[str, ...] = (
-    "NCCL_DEBUG",
-    "MILES_FT_DEBUG_",
-    "RAY_DEDUP_LOGS",
-)
-
-
-def _get_debug_passthrough_env_vars() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k.startswith(_DEBUG_ENV_PASSTHROUGH_PREFIXES)}
+# Workaround for a freshly-respawned cell deterministically wedging in its first forward
+# after a crash+rejoin: on NCCL 2.28.x a small AllReduce on the fresh rejoin communicator
+# hangs under the RING_LL protocol (cuda-gdb shows all ranks spinning in
+# ncclDevKernel_AllReduce_Sum_f32_RING_LL). Forcing the Simple protocol avoids the affected
+# path. A two-way bisect proved NCCL_PROTO=Simple is both necessary (dropping it re-wedges)
+# and sufficient (it alone clears the wedge; the cuMem/NVLS-off vars first tried alongside it
+# were ghosts -- NCCL logs show NVLS allocating fine on all ranks). The freshly-built comms
+# are otherwise healthy (verified by hammering them in isolation).
+#
+# TODO: this is an NCCL-2.28.x-specific bug workaround, not a real fix. Investigate the
+# underlying RING_LL deadlock on a recreated communicator (NCCL upstream issue / version bump)
+# so this env override can be dropped.
+_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS: dict[str, str] = {
+    "NCCL_PROTO": "Simple",
+}
 
 
 def run_training(
@@ -200,6 +202,7 @@ def run_training(
     merged_env_vars = {
         **_DETERMINISTIC_ENV_VARS,
         **_TRAINER_FT_ENV_VARS,
+        **_FT_NCCL_REJOIN_WORKAROUND_ENV_VARS,
         # Run eager (no torch.compile). A cell respawned after a crash cold-recompiles its first
         # forward; under dynamic batch sizes that is a per-shape Inductor compile that is slow
         # (observed 124s..1510s, growing) and memory-heavy enough to OOM-kill the actor. That
@@ -211,7 +214,6 @@ def run_training(
         # keeping torch.compile under FT respawn (warm/shared Inductor cache survivor->respawn, or
         # bounded recompile) so the tests can exercise the compiled path again.
         "TORCHDYNAMO_DISABLE": "1",
-        **_get_debug_passthrough_env_vars(),
         **(extra_env_vars or {}),
     }
     U.execute_train(

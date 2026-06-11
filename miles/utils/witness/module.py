@@ -31,43 +31,6 @@ def install_witness(
     model.local_tail_witness = _DataWitness(buffer_size=buffer_size, sequence_parallel=sequence_parallel)
 
 
-def reset_witness_state(*, model: Sequence[nn.Module], optimizer: torch.optim.Optimizer) -> None:
-    """Zero every witness row and its optimizer state.
-
-    Witness rows are per-run diagnostic state: the event analyzer only sees the current
-    run's events, so rows trained by a previous run and loaded back through a disk
-    checkpoint resume would read as "present" for witness ids the current run never
-    trained (the id allocator restarts from zero on resume and re-issues the same ids to
-    new samples). The Adam state of those rows survives a resume the same way and can
-    keep moving a row whose gradient is exactly zero. Call this after a disk-checkpoint
-    load. Do NOT call it on the healing in-memory transfer path: the received rows must
-    stay bitwise equal to the surviving cell's for the cross-replica weight checksum.
-    """
-    for witness in _get_all_witnesses_in_model(model):
-        model_weight = witness.witness.weight
-        model_weight.data.zero_()
-        main_param = getattr(model_weight, "main_param", None)
-        if main_param is not None:
-            main_param.data.zero_()
-
-    # Megatron's ChainedOptimizer.state is a ProxyDict keyed by (chain_index, param) while
-    # plain torch optimizers key by param directly, so indexing the state by the model
-    # weight (as _zero_witness_rows does) silently misses it there. The distributed
-    # optimizer keeps the fp32 main weights as per-param shard tensors that inherit the
-    # _is_witness_param flag from the model param; scan for that flag to find both the
-    # fp32 shards and their Adam state. Zeroing whole tensors is safe: the shards are
-    # per-param, so a flagged entry contains witness rows only.
-    state = optimizer.state
-    for key in state:
-        param = key[-1] if isinstance(key, tuple) else key
-        if not getattr(param, "_is_witness_param", False):
-            continue
-        param.data.zero_()
-        for value in state[key].values():
-            if isinstance(value, torch.Tensor):
-                value.zero_()
-
-
 def witness_dump_and_clear_stale(
     *,
     model: Sequence[nn.Module],

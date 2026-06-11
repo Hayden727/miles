@@ -95,8 +95,8 @@ scenario requires bitwise equality (`rel <= 0`), which relies on both
 `train/grad_norm` (`rtol<=1e-6`): its bracketing depends on the distributed-optimizer
 shard count (8 flat vs 2 per cell), so a few fp32 ulps are inherent, while the grads
 themselves stay bitwise-checked via the dumps. Every other scenario allows a small
-relative diff (`rel <= 0.0085`, with_failure also flooring near-zero MoE-expert and
-QK-norm (`q_layernorm`/`k_layernorm`) grads at `max_abs <= 1e-3`). Unmatched tensors are a fail-closed error, so end each list with a `.*`
+relative diff (`rel <= 0.0085`, with_failure also flooring near-zero MoE-expert grads at
+`max_abs <= 1e-3`). Unmatched tensors are a fail-closed error, so end each list with a `.*`
 catch-all. Exact per-scenario thresholds are in Test Definitions below.
 
 ## Debug Rollout Data
@@ -171,8 +171,8 @@ Phase B — target:
   6. Rollout 3: _refresh_cells() healing → N cells
   7. Rollout 4: N cells stable
 
-Compare: phase_b dumps (rel <= 0.0085; MoE expert grads and QK-norm grads also
-tolerate max_abs <= 1e-3) and metrics (rtol=5e-2).
+Compare: phase_b dumps (rel <= 0.0085, MoE expert grads also tolerate max_abs <= 1e-3)
+and metrics (rtol=5e-2).
 
 Fault injection via --ci-ft-test-actions JSON (data-driven, executed by RayTrainGroup).
 The JSON `at_rollout` field specifies which rollout_id triggers the action.
@@ -184,21 +184,13 @@ The `dp2_cp2_real_rollout_dense` mode runs this scenario with live on-policy gen
 (`Qwen3-0.6B`) instead of the truncated 5-layer MoE model. Rationale: the post-crash
 degraded-quorum commit accumulates microbatches in a different floating-point bracketing than
 the fault-free side — a fault-inherent ulp-level weight difference no collective ordering
-removes. A fully-trained dense model keeps that drift small (calibrated peaky logits, no MoE
-router near-ties), while keeping rollout, update_weights and the crash→retry→heal path all
-real. The MoE expert-grad floor in the threshold list is inert on the dense model (no experts)
-and applies only to the MoE debug-data modes of this scenario.
-
-Comparison scope under live generation: even ulp-level weight drift can flip individual
-sampled tokens (measured: `input_ids` of the first post-fault rollout differ between the
-faulted and fault-free runs), so the training data of post-fault rollouts diverges between
-the two sides and their gradients/activations have no equality contract. The first post-fault
-rollout therefore compares only the dumped weights (the state produced by the recovery
-commit, captured before that rollout's own update — the actual recovery-correctness
-contract) plus the regular metric comparison; everything up to and including the crash
-rollout stays fully strict, and rollouts further past the fault would not be comparable at
-all (the comparison fails closed if the phase layout ever produces one). Debug-data modes
-replay identical data on both sides, so all rollouts stay fully strict there.
+removes. Under live generation an uncalibrated truncated MoE model amplifies that ulp drift
+into flipped sampled tokens (near-tie logits, MoE router near-ties), so late-step metrics
+diverge by several percent even with no bug. A fully-trained dense model has calibrated
+(peaky) logits and no router, so the drift stays ulp-level and the faulted run can be compared
+strictly against the fault-free run while keeping rollout, update_weights and the
+crash→retry→heal path all real. The MoE expert-grad floor in the threshold list is inert on
+the dense model (no experts) and applies only to the MoE debug-data modes of this scenario.
 
 ### `scenario_deterministic`
 

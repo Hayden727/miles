@@ -2,7 +2,6 @@
 # WARNING: Do NOT relax any assert logic in this file. All assertions must remain strict.
 
 import json
-import re
 
 from tests.e2e.ft.conftest_ft.app import create_comparison_app_and_run_ci
 from tests.e2e.ft.conftest_ft.execution import get_common_train_args, get_ft_args
@@ -22,33 +21,15 @@ NUM_PHASE_B_STEPS: int = 4
 # crash-recovery (solo / degraded-quorum) collective's reduction order while their
 # weights stay bit-identical:
 #   - starved MoE expert grads (grad__...mlp.experts.*), max_abs ~1e-5..4e-4;
-#   - attention q/k_layernorm grads (grad__...q_layernorm.* / ...k_layernorm.*, the two
-#     QK-norm weights), measured rel ~1.1-1.5%, max_abs_diff ~6e-5..2.3e-4, failing
-#     layer varies per rollout -> FP noise.
+#   - attention k_layernorm grads (grad__...k_layernorm.*), measured rel ~1.2-1.5%,
+#     max_abs_diff ~2.3e-4, failing layer varies per rollout -> FP noise.
 # Both are cancellation-dominated near-zero grads, so they also tolerate
 # max_abs <= 1e-3 (well below real grads ~1e-2): a real diff there still fails, and
 # everything else stays strict via the catch-all (an unmatched tensor is fail-closed).
 _DIFF_THRESHOLDS: list[tuple[str, str]] = [
     (r"grad__.*\.mlp\.experts\..*", "rel <= 0.0085 or max_abs <= 1e-3"),
-    (r"grad__.*\.[qk]_layernorm\..*", "rel <= 0.0085 or max_abs <= 1e-3"),
+    (r"grad__.*\.k_layernorm\..*", "rel <= 0.0085 or max_abs <= 1e-3"),
     (".*", "rel <= 0.0085"),
-]
-
-# Thresholds for the first post-fault rollout under LIVE generation (real_rollout modes
-# only). The degraded-quorum commit at the crash rollout accumulates microbatches in a
-# different floating-point bracketing than the fault-free baseline -- a fault-inherent
-# ulp-level weight difference -- and live sampling amplifies any ulp difference into
-# different sampled tokens (measured: input_ids diverge at the rollout after the crash).
-# The training DATA of that rollout therefore differs between the two sides and its
-# gradients/activations have no equality contract; comparing them compares two different
-# batches. The weights dumped at that rollout (the state produced by the recovery commit,
-# captured before the rollout's own update) remain strictly comparable and ARE the
-# recovery-correctness contract; metrics stay covered by compare_metrics. Debug-data
-# modes replay identical data on both sides, so everything stays strict there.
-_POST_FAULT_LIVE_ROLLOUT_DIFF_THRESHOLDS: list[tuple[str, str]] = [
-    (r"param__.*", "rel <= 0.0085"),
-    # Explicitly not-compared (see above) -- spelled out instead of fail-closed.
-    (".*", "rel >= 0"),
 ]
 
 # rollout_id in phase_b starts from NUM_PHASE_A_STEPS (ckpt resume offset)
@@ -107,33 +88,8 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
         diff_thresholds=_DIFF_THRESHOLDS,
         allow_skipped_pattern=INPUT_TENSORS_SKIP_PATTERN,
         allow_failed_pattern=INPUT_TENSORS_ALLOW_FAILED_PATTERN,
-        leaf_diff_thresholds=lambda leaf: _leaf_diff_thresholds(mode, leaf),
     )
     print("With-failure comparison test PASSED")
-
-
-def _leaf_diff_thresholds(mode: FTTestMode, leaf: str) -> list[tuple[str, str]] | None:
-    if not mode.has_real_rollout:
-        return None
-
-    match = re.search(r"rollout_(\d+)$", leaf)
-    if match is None:
-        return None
-
-    crash_rollout = NUM_PHASE_A_STEPS + 1
-    leaf_rollout = int(match.group(1))
-    if leaf_rollout <= crash_rollout:
-        return None
-    if leaf_rollout == crash_rollout + 1:
-        return _POST_FAULT_LIVE_ROLLOUT_DIFF_THRESHOLDS
-
-    # Beyond crash_rollout + 1 even the weights are products of diverged live data, so no
-    # tensor of those rollouts has an equality contract -- the phase layout must keep the
-    # first post-fault live rollout as the last compared one.
-    raise ValueError(
-        f"Leaf {leaf!r} is more than one rollout past the fault (crash_rollout={crash_rollout}); "
-        "its weights are trained on diverged live-generated data and cannot be compared."
-    )
 
 
 TEST_NAME: str = "trainer_ft_with_failure"

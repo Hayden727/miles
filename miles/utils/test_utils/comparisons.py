@@ -2,7 +2,6 @@ import logging
 import math
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 from miles.utils.event_logger.logger import read_events
@@ -29,14 +28,7 @@ def compare_dumps(
     phase_subdir: str | None = None,
     grouping_skip_keys: list[str] | None = None,
     extra_args: list[str] | None = None,
-    leaf_diff_thresholds: Callable[[str], list[tuple[str, str]] | None] | None = None,
 ) -> None:
-    """Compare every matching leaf dump dir (e.g. ``fwd_bwd/rollout_3``) of baseline vs target.
-
-    ``leaf_diff_thresholds`` optionally overrides ``diff_thresholds`` for individual leaf
-    dirs; it receives the leaf path and returns the thresholds to use, or None to keep the
-    default ``diff_thresholds``.
-    """
     subdir = phase_subdir or ""
     baseline_root = Path(baseline_dir) / "dumps" / subdir
     target_root = Path(target_dir) / "dumps" / subdir
@@ -58,11 +50,10 @@ def compare_dumps(
 
     failed_leaves: list[str] = []
     for leaf in baseline_leaves:
-        leaf_thresholds = leaf_diff_thresholds(leaf) if leaf_diff_thresholds is not None else None
         result = _run_comparator(
             baseline_path=baseline_root / leaf,
             target_path=target_root / leaf,
-            diff_thresholds=leaf_thresholds if leaf_thresholds is not None else diff_thresholds,
+            diff_thresholds=diff_thresholds,
             allow_skipped_pattern=allow_skipped_pattern,
             allow_failed_pattern=allow_failed_pattern,
             grouping_skip_keys=grouping_skip_keys,
