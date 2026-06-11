@@ -184,13 +184,21 @@ The `dp2_cp2_real_rollout_dense` mode runs this scenario with live on-policy gen
 (`Qwen3-0.6B`) instead of the truncated 5-layer MoE model. Rationale: the post-crash
 degraded-quorum commit accumulates microbatches in a different floating-point bracketing than
 the fault-free side — a fault-inherent ulp-level weight difference no collective ordering
-removes. Under live generation an uncalibrated truncated MoE model amplifies that ulp drift
-into flipped sampled tokens (near-tie logits, MoE router near-ties), so late-step metrics
-diverge by several percent even with no bug. A fully-trained dense model has calibrated
-(peaky) logits and no router, so the drift stays ulp-level and the faulted run can be compared
-strictly against the fault-free run while keeping rollout, update_weights and the
-crash→retry→heal path all real. The MoE expert-grad floor in the threshold list is inert on
-the dense model (no experts) and applies only to the MoE debug-data modes of this scenario.
+removes. A fully-trained dense model keeps that drift small (calibrated peaky logits, no MoE
+router near-ties), while keeping rollout, update_weights and the crash→retry→heal path all
+real. The MoE expert-grad floor in the threshold list is inert on the dense model (no experts)
+and applies only to the MoE debug-data modes of this scenario.
+
+Comparison scope under live generation: even ulp-level weight drift can flip individual
+sampled tokens (measured: `input_ids` of the first post-fault rollout differ between the
+faulted and fault-free runs), so the training data of post-fault rollouts diverges between
+the two sides and their gradients/activations have no equality contract. The first post-fault
+rollout therefore compares only the dumped weights (the state produced by the recovery
+commit, captured before that rollout's own update — the actual recovery-correctness
+contract) plus the regular metric comparison; everything up to and including the crash
+rollout stays fully strict, and rollouts further past the fault would not be comparable at
+all (the comparison fails closed if the phase layout ever produces one). Debug-data modes
+replay identical data on both sides, so all rollouts stay fully strict there.
 
 ### `scenario_deterministic`
 
