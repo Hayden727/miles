@@ -279,9 +279,6 @@ def _cleanup_dump_dir(dump_dir: Path) -> None:
 
 
 def _barrier_after_dump_dir_cleanup() -> None:
-    # Must issue exactly the same collectives on every rank of every cell, independent of
-    # per-process state (e.g. the parent-wipe latch): an asymmetric barrier count shifts
-    # the pairing of every later collective on the cross-cell communicator.
     if dist.is_initialized():
         dist.barrier()
 
