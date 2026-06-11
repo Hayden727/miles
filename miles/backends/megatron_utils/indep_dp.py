@@ -36,7 +36,7 @@ def create_indep_dp_group(
     _TIMEOUT = timedelta(seconds=120)
 
     def _create(pg_cls: type, backend_name: str) -> dist.ProcessGroup:
-        pg = pg_cls(timeout=_TIMEOUT)
+        pg = _debug_maybe_traced_pg_cls(pg_cls)(timeout=_TIMEOUT)
         pg.configure(
             store_addr=f"{store_addr}/indep_dp/{backend_name}/{indep_dp_info.quorum_id}/{megatron_rank}",
             replica_id=str(indep_dp_info.cell_index),
@@ -136,6 +136,59 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
     # Intra-cell consensus: if ANY rank's allreduce failed, ALL ranks discard.
     # get_gloo_group() is cell-local (created from the default world PG).
     return collective_bool_and(value=allreduce_success, group=get_gloo_group())
+
+
+# Debug-only (env-gated via MILES_FT_DEBUG_PG_TRACE, default off): subclass the torchft PG
+# class so EVERY collective issued on the cross-cell PG object is logged with its call stack --
+# including calls that bypass miles' GeneralPGUtil seam (raw pg.X(...) calls, dist.* dispatch,
+# and c10d trampoline virtual calls). NCCL traces showed unlabeled count-1 allreduces on the
+# cross-cell comm whose per-cell counts can differ, silently shifting the collective pairing of
+# the two cells; this identifies their Python call sites.
+def _debug_maybe_traced_pg_cls(pg_cls: type) -> type:
+    if not bool(int(os.environ.get("MILES_FT_DEBUG_PG_TRACE", "0"))):
+        return pg_cls
+
+    import traceback
+
+    def _log_raw(op_name: str, args: tuple) -> None:
+        shape = None
+        for arg in args:
+            if isinstance(arg, torch.Tensor):
+                shape = f"numel={arg.numel()} dtype={arg.dtype}"
+                break
+            if isinstance(arg, list) and arg and isinstance(arg[0], torch.Tensor):
+                shape = f"list[numel={arg[0].numel()} dtype={arg[0].dtype}]"
+                break
+        stack = " | ".join(line.strip() for line in traceback.format_stack(limit=6)[:-2])
+        logger.info("pg_raw_trace %s %s stack=%s", op_name, shape, stack[-700:])
+
+    class _TracedPG(pg_cls):
+        def allreduce(self, *args, **kwargs):
+            _log_raw("allreduce", args)
+            return super().allreduce(*args, **kwargs)
+
+        def broadcast(self, *args, **kwargs):
+            _log_raw("broadcast", args)
+            return super().broadcast(*args, **kwargs)
+
+        def barrier(self, *args, **kwargs):
+            _log_raw("barrier", args)
+            return super().barrier(*args, **kwargs)
+
+        def send(self, *args, **kwargs):
+            _log_raw("send", args)
+            return super().send(*args, **kwargs)
+
+        def recv(self, *args, **kwargs):
+            _log_raw("recv", args)
+            return super().recv(*args, **kwargs)
+
+        def allgather(self, *args, **kwargs):
+            _log_raw("allgather", args)
+            return super().allgather(*args, **kwargs)
+
+    _TracedPG.__name__ = f"Traced{pg_cls.__name__}"
+    return _TracedPG
 
 
 # Debug-only membership probe, gated off by default. A degraded (single-member) cross-cell
