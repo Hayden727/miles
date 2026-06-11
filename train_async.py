@@ -5,6 +5,7 @@ from miles.ray.placement_group import create_placement_groups, create_rollout_ma
 from miles.utils.arguments import parse_args
 from miles.utils.async_utils import eager_create_task
 from miles.utils.control_server.server import start_control_server
+from miles.utils.event_analyzer.analyzer import run_analysis_from_args
 from miles.utils.logging_utils import configure_logger
 from miles.utils.mini_ft_controller import maybe_start_mini_ft_controller
 from miles.utils.misc import should_run_periodic_action
@@ -97,6 +98,7 @@ async def train(args):
             )
             break
 
+    run_analysis_from_args(args)
     await rollout_manager.dispose.remote()
 
 

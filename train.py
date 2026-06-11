@@ -129,10 +129,7 @@ async def train(args):
             )
             break
 
-    # The analysis at the start of each train() call only covers earlier rollouts'
-    # events, so the final rollout would otherwise never be analyzed.
     run_analysis_from_args(args)
-
     await rollout_manager.dispose.remote()
 
 
