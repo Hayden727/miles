@@ -54,18 +54,6 @@ class RolloutDataInjectionUtil:
         return _load_rollout_data_file(path)
 
     @classmethod
-    def assert_files_exist(cls, args) -> None:
-        if args.num_rollout is None:
-            return
-
-        missing = [
-            path
-            for rollout_id in range(args.ci_inject_rollout_data_start_rollout_id, args.num_rollout)
-            if not (path := Path(args.ci_inject_rollout_data_path.format(rollout_id=rollout_id))).is_file()
-        ]
-        assert not missing, f"Recorded rollout data to inject is missing: {[str(p) for p in missing]}"
-
-    @classmethod
     def assert_matches_generated(
         cls, args, *, generated: list[Sample], injected: list[Sample], rollout_id: int
     ) -> None:

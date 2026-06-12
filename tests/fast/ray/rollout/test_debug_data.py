@@ -181,37 +181,6 @@ class TestLoadInjectedRolloutData:
             RolloutDataInjectionUtil.load(args, rollout_id=7)
 
 
-class TestAssertInjectedRolloutDataFilesExist:
-    def test_passes_when_all_recordings_exist(self, tmp_path: Path):
-        """Startup check passes when every injected rollout in [start, num_rollout) is recorded."""
-        template = _save_recording(tmp_path, 3)
-        _save_recording(tmp_path, 4)
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=5
-        )
-
-        RolloutDataInjectionUtil.assert_files_exist(args)
-
-    def test_raises_listing_missing_recordings(self, tmp_path: Path):
-        """Startup check fails fast and names the missing files."""
-        template = _save_recording(tmp_path, 3)
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=5
-        )
-
-        with pytest.raises(AssertionError, match="rollout_4.pt"):
-            RolloutDataInjectionUtil.assert_files_exist(args)
-
-    def test_skipped_when_num_rollout_unknown(self, tmp_path: Path):
-        """num_rollout=None (derived from num_epoch later) skips the startup check."""
-        template = str(tmp_path / "rollout_{rollout_id}.pt")
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=None
-        )
-
-        RolloutDataInjectionUtil.assert_files_exist(args)
-
-
 def _make_paired_sample(prompt_tokens: list[int], response_tokens: list[int]):
     return make_sample(tokens=prompt_tokens + response_tokens, response_length=len(response_tokens))
 

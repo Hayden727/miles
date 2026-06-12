@@ -77,9 +77,6 @@ class RolloutManager:
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        if self.args.ci_inject_rollout_data_path is not None:
-            RolloutDataInjectionUtil.assert_files_exist(self.args)
-
         if self.args.debug_train_only:
             self.servers: dict[str, RolloutServer] = {}
         else:
