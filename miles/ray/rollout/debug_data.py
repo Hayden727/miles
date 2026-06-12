@@ -20,70 +20,6 @@ def load_debug_rollout_data(args, rollout_id: int) -> tuple[list[Sample], dict]:
     return data, metadata
 
 
-def should_inject_rollout_data(args, rollout_id: int) -> bool:
-    if args.ci_inject_rollout_data_path is None:
-        return False
-    return rollout_id >= args.ci_inject_rollout_data_start_rollout_id
-
-
-def load_injected_rollout_data(args, rollout_id: int) -> tuple[list[Sample], dict]:
-    path = Path(args.ci_inject_rollout_data_path.format(rollout_id=rollout_id))
-    assert path.is_file(), f"Recorded rollout data to inject is missing: {path}"
-    return _load_rollout_data_file(path)
-
-
-# Mean response-token match ratio below which the discarded generation is treated as evidence
-# of wrong engine weights. Legitimate divergence (ulp-level weight drift flipping individual
-# sampled tokens, then cascading within a response) keeps the ratio high; grossly wrong
-# weights (e.g. a broken post-fault update_weights) make responses unrelated (ratio near 0).
-_INJECTED_MIN_RESPONSE_TOKEN_MATCH_RATIO: float = 0.9
-
-
-def assert_injected_rollout_data_matches_generated(
-    *, generated: list[Sample], injected: list[Sample], rollout_id: int
-) -> None:
-    """Sanity-check that the discarded generated data stays close to the injected recording."""
-    assert len(generated) == len(
-        injected
-    ), f"rollout {rollout_id}: sample count mismatch, generated {len(generated)} vs injected {len(injected)}"
-
-    ratios: list[float] = []
-    for index, (generated_sample, injected_sample) in enumerate(zip(generated, injected, strict=True)):
-        # Prompts must be identical: a mismatch means broken pairing/wiring (wrong file,
-        # different data order), which no drift can explain.
-        assert _prompt_tokens(generated_sample) == _prompt_tokens(injected_sample), (
-            f"rollout {rollout_id}: prompt tokens mismatch at sample {index}; "
-            "injected recording does not pair with the generated batch"
-        )
-        ratios.append(_response_token_match_ratio(generated_sample, injected_sample))
-
-    mean_ratio = sum(ratios) / len(ratios)
-    logger.info(
-        f"CI rollout-data injection match for rollout {rollout_id}: "
-        f"mean response token match {mean_ratio:.4f} (min {min(ratios):.4f}, "
-        f"threshold {_INJECTED_MIN_RESPONSE_TOKEN_MATCH_RATIO}) over {len(ratios)} samples"
-    )
-    assert mean_ratio > _INJECTED_MIN_RESPONSE_TOKEN_MATCH_RATIO, (
-        f"rollout {rollout_id}: generated responses match the injected recording at only "
-        f"{mean_ratio:.4f} (threshold {_INJECTED_MIN_RESPONSE_TOKEN_MATCH_RATIO}); the engine "
-        "weights likely diverged from the baseline beyond ulp-level drift"
-    )
-
-
-def assert_injected_rollout_data_files_exist(args) -> None:
-    """Fail fast at startup instead of mid-training when a recording is missing."""
-    if args.num_rollout is None:
-        # num_rollout is derived from num_epoch later; the per-rollout assert still covers it.
-        return
-
-    missing = [
-        path
-        for rollout_id in range(args.ci_inject_rollout_data_start_rollout_id, args.num_rollout)
-        if not (path := Path(args.ci_inject_rollout_data_path.format(rollout_id=rollout_id))).is_file()
-    ]
-    assert not missing, f"Recorded rollout data to inject is missing: {[str(p) for p in missing]}"
-
-
 def save_debug_rollout_data(args, data, rollout_id, evaluation: bool, metadata: dict | None = None) -> None:
     # TODO to be refactored (originally Buffer._set_data)
     if (path_template := args.save_debug_rollout_data) is not None:
@@ -104,27 +40,94 @@ def save_debug_rollout_data(args, data, rollout_id, evaluation: bool, metadata: 
         torch.save(dict(rollout_id=rollout_id, metadata=metadata or {}, **dump_data), path)
 
 
+class RolloutDataInjectionUtil:
+    """CI comparison tests only: replace individual rollouts' training data with a recording
+    (--ci-inject-rollout-data-*) while engines and generation stay real."""
+
+    # Mean response-token match ratio below which the discarded generation is treated as
+    # evidence of wrong engine weights. Legitimate divergence (ulp-level weight drift flipping
+    # individual sampled tokens, then cascading within a response) keeps the ratio high; grossly
+    # wrong weights (e.g. a broken post-fault update_weights) make responses unrelated (ratio
+    # near 0).
+    _MIN_RESPONSE_TOKEN_MATCH_RATIO: float = 0.9
+
+    @staticmethod
+    def should_inject(args, rollout_id: int) -> bool:
+        if args.ci_inject_rollout_data_path is None:
+            return False
+        return rollout_id >= args.ci_inject_rollout_data_start_rollout_id
+
+    @staticmethod
+    def load(args, rollout_id: int) -> tuple[list[Sample], dict]:
+        path = Path(args.ci_inject_rollout_data_path.format(rollout_id=rollout_id))
+        assert path.is_file(), f"Recorded rollout data to inject is missing: {path}"
+        return _load_rollout_data_file(path)
+
+    @staticmethod
+    def assert_files_exist(args) -> None:
+        """Fail fast at startup instead of mid-training when a recording is missing."""
+        if args.num_rollout is None:
+            # num_rollout is derived from num_epoch later; the per-rollout assert still covers it.
+            return
+
+        missing = [
+            path
+            for rollout_id in range(args.ci_inject_rollout_data_start_rollout_id, args.num_rollout)
+            if not (path := Path(args.ci_inject_rollout_data_path.format(rollout_id=rollout_id))).is_file()
+        ]
+        assert not missing, f"Recorded rollout data to inject is missing: {[str(p) for p in missing]}"
+
+    @classmethod
+    def assert_matches_generated(cls, *, generated: list[Sample], injected: list[Sample], rollout_id: int) -> None:
+        """Sanity-check that the discarded generated data stays close to the injected recording."""
+        assert len(generated) == len(
+            injected
+        ), f"rollout {rollout_id}: sample count mismatch, generated {len(generated)} vs injected {len(injected)}"
+
+        ratios: list[float] = []
+        for index, (generated_sample, injected_sample) in enumerate(zip(generated, injected, strict=True)):
+            # Prompts must be identical: a mismatch means broken pairing/wiring (wrong file,
+            # different data order), which no drift can explain.
+            assert cls._prompt_tokens(generated_sample) == cls._prompt_tokens(injected_sample), (
+                f"rollout {rollout_id}: prompt tokens mismatch at sample {index}; "
+                "injected recording does not pair with the generated batch"
+            )
+            ratios.append(cls._response_token_match_ratio(generated_sample, injected_sample))
+
+        mean_ratio = sum(ratios) / len(ratios)
+        logger.info(
+            f"CI rollout-data injection match for rollout {rollout_id}: "
+            f"mean response token match {mean_ratio:.4f} (min {min(ratios):.4f}, "
+            f"threshold {cls._MIN_RESPONSE_TOKEN_MATCH_RATIO}) over {len(ratios)} samples"
+        )
+        assert mean_ratio > cls._MIN_RESPONSE_TOKEN_MATCH_RATIO, (
+            f"rollout {rollout_id}: generated responses match the injected recording at only "
+            f"{mean_ratio:.4f} (threshold {cls._MIN_RESPONSE_TOKEN_MATCH_RATIO}); the engine "
+            "weights likely diverged from the baseline beyond ulp-level drift"
+        )
+
+    @classmethod
+    def _response_token_match_ratio(cls, a: Sample, b: Sample) -> float:
+        response_a = cls._response_tokens(a)
+        response_b = cls._response_tokens(b)
+        denominator = max(len(response_a), len(response_b))
+        if denominator == 0:
+            return 1.0
+        matched = sum(token_a == token_b for token_a, token_b in zip(response_a, response_b))
+        return matched / denominator
+
+    @staticmethod
+    def _prompt_tokens(sample: Sample) -> list[int]:
+        return sample.tokens[: len(sample.tokens) - sample.response_length]
+
+    @staticmethod
+    def _response_tokens(sample: Sample) -> list[int]:
+        return sample.tokens[len(sample.tokens) - sample.response_length :]
+
+
 def _load_rollout_data_file(path: Path) -> tuple[list[Sample], dict]:
     payload = torch.load(path, weights_only=False)
     data = [Sample.from_dict(sample) for sample in payload["samples"]]
     # Files recorded before metadata recording have no "metadata" key.
     metadata = payload.get("metadata") or {}
     return data, metadata
-
-
-def _response_token_match_ratio(a: Sample, b: Sample) -> float:
-    response_a = _response_tokens(a)
-    response_b = _response_tokens(b)
-    denominator = max(len(response_a), len(response_b))
-    if denominator == 0:
-        return 1.0
-    matched = sum(token_a == token_b for token_a, token_b in zip(response_a, response_b))
-    return matched / denominator
-
-
-def _prompt_tokens(sample: Sample) -> list[int]:
-    return sample.tokens[: len(sample.tokens) - sample.response_length]
-
-
-def _response_tokens(sample: Sample) -> list[int]:
-    return sample.tokens[len(sample.tokens) - sample.response_length :]

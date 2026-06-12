@@ -192,7 +192,7 @@ generated samples are discarded after the fact), update_weights after the degrad
 and after healing, and health-monitor pause/resume — i.e. the whole
 crash→retry→heal→weight-sync path. The discarded generation is not wasted: each injected
 rollout asserts the generated responses match the recording at a mean per-token ratio
-> 0.9 with bitwise-identical prompts (`assert_injected_rollout_data_matches_generated`).
+> 0.9 with bitwise-identical prompts (`RolloutDataInjectionUtil.assert_matches_generated`).
 ulp-level drift only flips occasional sampled tokens (then cascades within one response),
 keeping the ratio high, while grossly wrong post-fault engine weights (e.g. a broken
 update_weights) would drop it to near zero — so wrong-weights bugs still fail the test

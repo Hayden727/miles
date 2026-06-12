@@ -8,12 +8,9 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from miles.ray.rollout.addr_allocator import PortCursors
 from miles.ray.rollout.debug_data import (
-    assert_injected_rollout_data_files_exist,
-    assert_injected_rollout_data_matches_generated,
+    RolloutDataInjectionUtil,
     load_debug_rollout_data,
-    load_injected_rollout_data,
     save_debug_rollout_data,
-    should_inject_rollout_data,
 )
 from miles.ray.rollout.metrics import log_eval_rollout_data, log_rollout_data
 from miles.ray.rollout.rollout_data_conversion import postprocess_rollout_data
@@ -81,7 +78,7 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.ci_inject_rollout_data_path is not None:
-            assert_injected_rollout_data_files_exist(self.args)
+            RolloutDataInjectionUtil.assert_files_exist(self.args)
 
         if self.args.debug_train_only:
             self.servers: dict[str, RolloutServer] = {}
@@ -177,14 +174,14 @@ class RolloutManager:
             data, metadata = postprocess_rollout_data(
                 self.args, data, train_parallel_config=self.train_parallel_config
             )
-            if should_inject_rollout_data(self.args, rollout_id):
+            if RolloutDataInjectionUtil.should_inject(self.args, rollout_id):
                 # CI comparison tests: generation above ran normally (keeping engines,
                 # update_weights and health monitoring real) but its output is discarded
                 # in favor of the recorded data, so both runs train on identical inputs.
                 logger.info(f"CI rollout-data injection: replacing generated data of rollout {rollout_id}")
                 generated_data = data
-                data, metadata = load_injected_rollout_data(self.args, rollout_id=rollout_id)
-                assert_injected_rollout_data_matches_generated(
+                data, metadata = RolloutDataInjectionUtil.load(self.args, rollout_id=rollout_id)
+                RolloutDataInjectionUtil.assert_matches_generated(
                     generated=generated_data, injected=data, rollout_id=rollout_id
                 )
                 metrics = None
