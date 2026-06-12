@@ -1968,9 +1968,6 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def miles_validate_args(args):
-    if args.ci_test:
-        args.check_weight_update_equal = True
-
     args.eval_datasets = _resolve_eval_datasets(args)
 
     if args.recompute_logprobs_via_prefill:
@@ -2225,6 +2222,11 @@ def miles_validate_args(args):
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
+
+    # The weight-update check requires training to actually push weights to the
+    # rollout engines; the debug modes each skip one side of that round trip.
+    if args.ci_test and not args.debug_rollout_only and not args.debug_train_only:
+        args.check_weight_update_equal = True
 
     # always true on offload for colocate at the moment.
     if args.update_weight_transfer_mode == "p2p":
