@@ -80,6 +80,7 @@ class RayTrainGroup:
             await self.rollout_manager.recover_updatable_engines.remote()
 
         info = await self.rollout_manager.get_updatable_engines_and_lock.remote()
+
         await self._broadcast("update_weights", info=info)
 
     async def onload(self):
