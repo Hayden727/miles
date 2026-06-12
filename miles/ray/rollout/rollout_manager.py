@@ -115,7 +115,7 @@ class RolloutManager:
         start_time = time.time()
         self.rollout_id = rollout_id
         self._health_monitoring_resume()
-        if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
+        if self.args.ci_test and self.args.use_fault_tolerance:
             self._try_ci_fault_injection(rollout_id)
         data, metadata, metrics = await self._get_rollout_data(rollout_id=rollout_id)
         save_debug_rollout_data(self.args, data, rollout_id=rollout_id, evaluation=False, metadata=metadata)
@@ -315,9 +315,9 @@ class RolloutManager:
             if rollout_id not in kill_rollout_ids:
                 return
         else:
-            if not self._ci_fault_injection_pending:
+            # Legacy one-shot mode: fire once, no earlier than rollout 2.
+            if rollout_id < 2 or not self._ci_fault_injection_pending:
                 return
-            # Only inject fault once
             self._ci_fault_injection_pending = False
 
         if (
