@@ -41,21 +41,6 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def health_monitoring_paused(rollout_manager) -> AsyncIterator[None]:
-    """Pause engine health checking around a weight update.
-
-    The update pauses generation on every engine, and sglang's /health_generate fails
-    once generation has been paused for ~20s, so the health monitor would kill a healthy
-    engine in the middle of the weight broadcast.
-    """
-    await rollout_manager.pause_health_monitoring.remote()
-    try:
-        yield
-    finally:
-        await rollout_manager.resume_health_monitoring.remote()
-
-
 @ray.remote
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
@@ -101,7 +86,6 @@ class RolloutManager:
 
         # TODO will be replaced by full ft, thus temporarily leave it without modifications
         self._health_monitors = []
-        self._health_checking_before_pause = False
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             for srv in self.servers.values():
                 for group in srv.server_groups:
@@ -124,7 +108,7 @@ class RolloutManager:
     async def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
-        self._health_monitoring_resume()
+        self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metadata, metrics = await self._get_rollout_data(rollout_id=rollout_id)
@@ -148,7 +132,7 @@ class RolloutManager:
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
-        self._health_monitoring_resume()
+        self.health_monitoring_resume()
 
         if self.use_experimental_refactor:
             result = await asyncio.to_thread(
@@ -198,7 +182,7 @@ class RolloutManager:
 
     # TODO may parallelly execute offload/onload across services
     async def offload(self, tags: list[str] | None = None):
-        self._health_monitoring_pause()
+        self.health_monitoring_pause()
         for srv in self.servers.values():
             await srv.offload(tags=tags)
 
@@ -235,15 +219,6 @@ class RolloutManager:
             engine_gpu_offsets=srv.engine_gpu_offsets,
         )
 
-    async def pause_health_monitoring(self):
-        self._health_checking_before_pause = any(m.is_checking_enabled() for m in self._health_monitors)
-        self._health_monitoring_pause()
-
-    async def resume_health_monitoring(self):
-        """Undo pause_health_monitoring; no-op if checking was already off (e.g. engines offloaded)."""
-        if self._health_checking_before_pause:
-            self._health_monitoring_resume()
-
     def clear_updatable_has_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear has_new_engines after update_weights
         srv = self._get_updatable_server()
@@ -256,7 +231,7 @@ class RolloutManager:
         Recovers the updatable model (the one that receives weight
         updates from training).
         """
-        self._health_monitoring_pause()
+        self.health_monitoring_pause()
         srv = self._get_updatable_server()
         if self.rollout_id == -1 or srv is None:
             return
@@ -303,11 +278,11 @@ class RolloutManager:
 
     # -------------------------- utils -----------------------------
 
-    def _health_monitoring_pause(self) -> None:
+    def health_monitoring_pause(self) -> None:
         for monitor in self._health_monitors:
             monitor.pause()
 
-    def _health_monitoring_resume(self) -> None:
+    def health_monitoring_resume(self) -> None:
         for monitor in self._health_monitors:
             monitor.resume()
 
@@ -352,3 +327,18 @@ class EnginesAndLock:
     has_new_engines: bool
     engine_gpu_counts: list[int]
     engine_gpu_offsets: list[int]
+
+
+@asynccontextmanager
+async def with_paused_health_monitoring(rollout_manager) -> AsyncIterator[None]:
+    """Pause engine health checking around a weight update.
+
+    The update pauses generation on every engine, and sglang's /health_generate fails
+    once generation has been paused for ~20s, so the health monitor would kill a healthy
+    engine in the middle of the weight broadcast.
+    """
+    await rollout_manager.health_monitoring_pause.remote()
+    try:
+        yield
+    finally:
+        await rollout_manager.health_monitoring_resume.remote()

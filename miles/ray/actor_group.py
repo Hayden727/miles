@@ -7,7 +7,7 @@ import asyncio
 
 from ray.util.placement_group import PlacementGroup
 
-from miles.ray.rollout.rollout_manager import health_monitoring_paused
+from miles.ray.rollout.rollout_manager import with_paused_health_monitoring
 from miles.ray.train.actor_factory import allocate_gpus_for_actor
 
 
@@ -77,7 +77,7 @@ class RayTrainGroup:
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        async with health_monitoring_paused(self.rollout_manager):
+        async with with_paused_health_monitoring(self.rollout_manager):
             if self.args.use_fault_tolerance:
                 await self.rollout_manager.recover_updatable_engines.remote()
 
