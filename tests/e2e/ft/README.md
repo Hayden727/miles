@@ -27,12 +27,15 @@ All modes are **disaggregated** (training and rollout on separate nodes). Modes 
 | `dp2_cp2_tp2_ep2` | 1 | 2 | 3 | CP2 TP2 EP2 | debug data | 5-layer MoE | TP + EP |
 | `dp2_cp2_pp2` | 1 | 2 | 3 | CP2 PP2 | debug data | 5-layer MoE | PP |
 | `dp4_cp2` | 1 | 4 | 5 | CP2 | debug data | 5-layer MoE | Multi-replica (>=4 cells) |
-| `dp2_cp2_real_rollout` | 1 | 2 | 3 | CP2 | 4 engines × 1 GPU | 5-layer MoE | Real rollout engines + weight update path |
+| `dp2_cp2_real_rollout` | 1 | 2 | 3 | CP2 | 4 engines × 1 GPU | 5-layer MoE | Real rollout engines + weight update path (no_failure, deterministic) |
+| `dp2_cp2_real_rollout_dense` | 1 | 2 | 3 | CP2 | 4 engines × 1 GPU | dense Qwen3-0.6B | Real rollout under a fault + injection match guard (with_failure) |
 | `6node_dp4_cp2_tp2_pp2_ep2_etp2` | 4+2 | 4 | 5 | CP2 TP2 PP2 EP2 ETP2 | 2 engines × 8 GPU | full MoE | Large-scale, all parallelism |
 
 Batch sizes are deliberately **not** divisible by num_cells to test uneven sample distribution across replicas (e.g. DP4 + batch 5 → 2,1,1,1).
 
-The 1-node modes use the truncated 5-layer MoE model (`Qwen3-30B-A3B-5layer`).
+The 1-node modes use the truncated 5-layer MoE model (`Qwen3-30B-A3B-5layer`), except
+`dp2_cp2_real_rollout_dense`, which uses a small real dense model (`Qwen3-0.6B`) — see the
+`scenario_with_failure` definition for why the injection match guard requires it.
 
 Authorized CI skips (no entry file): `6node_dp4_cp2_tp2_pp2_ep2_etp2` (multi-node) and `with_failure × dp4_cp2`.
 
@@ -177,7 +180,7 @@ The JSON `at_rollout` field specifies which rollout_id triggers the action.
 The `attempt` field (for actor-level actions like `crash_before_allreduce`) specifies which retry attempt to match.
 ```
 
-The `dp2_cp2_real_rollout` mode runs this scenario with live generation (real sglang
+The `dp2_cp2_real_rollout_dense` mode runs this scenario with live generation (real sglang
 engines, deterministic inference, temperature 0.8), and the target's **post-fault rollouts
 inject the baseline's recorded rollout data** (`--ci-inject-rollout-data-path` pointing at
 the baseline phase_b's `--save-debug-rollout-data` output, start id = crash rollout + 1).
@@ -204,6 +207,14 @@ scenario does not assert is the exact post-fault sampled content beyond that rat
 Pre-fault rollouts (up to and including the crash rollout, whose data is generated before
 the crash and redriven by the retry) are not injected — they remain a real sampled-data
 comparison.
+
+The match guard is why this scenario needs the **dense** model: the guard only separates
+"correct weights" from "wrong weights" if legitimate ulp drift keeps the match ratio high.
+Measured on the truncated 5-layer MoE (2026-06-12, 256 samples): the first post-fault
+rollout's mean response-token match was **0.19** (min 0.005) under correct weights — the
+uncalibrated logits and MoE-router near-ties amplify ulp drift into wholesale token
+divergence, so no threshold separates the two regimes. The calibrated dense model keeps
+legitimate drift at occasional flips, so the > 0.9 threshold is sharp.
 
 ### `scenario_deterministic`
 
