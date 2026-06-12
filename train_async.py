@@ -27,7 +27,9 @@ async def train(args):
     await actor_model.update_weights()
 
     if args.check_weight_update_equal:
-        await rollout_manager.check_weights.remote(action="compare")
+        await rollout_manager.check_weights.remote(
+            action="compare", allow_quant_error=args.check_weight_update_allow_quant_error
+        )
 
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)

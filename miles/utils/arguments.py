@@ -1492,6 +1492,12 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument("--check-weight-update-equal", action="store_true")
             parser.add_argument(
+                "--check-weight-update-allow-quant-error",
+                action="store_true",
+                help="When comparing weights after update, allow quantized tensors to differ "
+                "by up to 1 ULP of the quantized dtype per side (compared in dequantized space).",
+            )
+            parser.add_argument(
                 "--env-report",
                 type=str,
                 default=os.environ.get("MILES_SCRIPT_ENV_REPORT", ""),
@@ -1962,6 +1968,9 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def miles_validate_args(args):
+    if args.ci_test:
+        args.check_weight_update_equal = True
+
     args.eval_datasets = _resolve_eval_datasets(args)
 
     if args.recompute_logprobs_via_prefill:
