@@ -79,14 +79,6 @@ async def configure_sglang(args: Namespace) -> None:
 # ------------------------------- Megatron -------------------------------------
 
 
-@dataclasses.dataclass
-class _DumperMegatronUtilGlobalState:
-    phases_parent_wiped: set[DumperPhase] = dataclasses.field(default_factory=set)
-
-
-_dumper_megatron_util_global_state = _DumperMegatronUtilGlobalState()
-
-
 class DumperMegatronUtil:
     def __init__(
         self,
@@ -164,8 +156,10 @@ class DumperMegatronUtil:
 
         full_config = DumperConfig(**merged)
         dumper.reset()
-        if phase not in _dumper_megatron_util_global_state.phases_parent_wiped:
-            _dumper_megatron_util_global_state.phases_parent_wiped.add(phase)
+        # Wipe the whole phase dir only at run start (rollout 0). Gating on a
+        # per-process latch instead would make a respawned process re-wipe the
+        # phase dir mid-run, deleting dumps already written by surviving cells.
+        if rollout_id == 0:
             _cleanup_dump_dir(Path(merged["dir"]) / phase.value)
         _cleanup_dump_dir(Path(merged["dir"]) / merged["exp_name"])
         _barrier_after_dump_dir_cleanup()

@@ -69,14 +69,7 @@ def _make_args(dump_dir: Path, *, enable: bool = True) -> SimpleNamespace:
 
 
 class TestDumperMegatronUtilConfigure:
-    """Per-rollout dump directory layout and the process-level parent-wipe latch."""
-
-    @pytest.fixture(autouse=True)
-    def reset_global_state(self):
-        """Each test starts with fresh dumper-megatron global state."""
-        dumper_utils._dumper_megatron_util_global_state = dumper_utils._DumperMegatronUtilGlobalState()
-        yield
-        dumper_utils._dumper_megatron_util_global_state = dumper_utils._DumperMegatronUtilGlobalState()
+    """Per-rollout dump directory layout and the rollout-0 parent-wipe gate."""
 
     @pytest.fixture()
     def parallel_state(self):
@@ -112,8 +105,8 @@ class TestDumperMegatronUtilConfigure:
         config_kwargs = mock_dumper.configure.call_args.kwargs
         assert config_kwargs["exp_name"] == "fwd_bwd/rollout_3"
 
-    def test_first_configure_wipes_phase_parent_dir(self, tmp_path: Path, parallel_state) -> None:
-        """The first configure of a phase removes the whole phase parent dir (stale rollouts from a prior run)."""
+    def test_rollout_zero_configure_wipes_phase_parent_dir(self, tmp_path: Path, parallel_state) -> None:
+        """Configuring at rollout 0 removes the whole phase parent dir (stale rollouts from a prior run)."""
         args = _make_args(tmp_path)
         phase_parent = tmp_path / "fwd_bwd"
         stale_rollout = phase_parent / "rollout_9"
@@ -123,7 +116,6 @@ class TestDumperMegatronUtilConfigure:
         self._configure(args, phase=DumperPhase.FWD_BWD, rollout_id=0)
 
         assert not phase_parent.exists()
-        assert DumperPhase.FWD_BWD in dumper_utils._dumper_megatron_util_global_state.phases_parent_wiped
 
     def test_second_configure_does_not_wipe_parent_only_own_subdir(self, tmp_path: Path, parallel_state) -> None:
         """The second rollout keeps sibling rollout dirs and only cleans/recreates its own subdir."""
@@ -143,12 +135,27 @@ class TestDumperMegatronUtilConfigure:
         assert (rollout_0 / "keep.pt").exists()
         assert not rollout_1.exists()
 
-    def test_each_phase_has_independent_parent_wipe_latch(self, tmp_path: Path, parallel_state) -> None:
-        """fwd_bwd and fwd_only each wipe their own parent exactly once, independently."""
+    def test_respawned_process_at_nonzero_rollout_preserves_phase_parent_dir(
+        self, tmp_path: Path, parallel_state
+    ) -> None:
+        """A fresh process configuring mid-run (rollout > 0, e.g. after a respawn) keeps earlier rollout dumps."""
         args = _make_args(tmp_path)
-        self._configure(args, phase=DumperPhase.FWD_BWD, rollout_id=0)
+        phase_parent = tmp_path / "fwd_bwd"
+        rollout_0 = phase_parent / "rollout_0"
+        rollout_0.mkdir(parents=True)
+        (rollout_0 / "keep.pt").write_text("rollout_0 data")
+
+        self._configure(args, phase=DumperPhase.FWD_BWD, rollout_id=2)
+
+        assert (rollout_0 / "keep.pt").exists()
+
+    def test_rollout_zero_wipe_only_touches_own_phase_dir(self, tmp_path: Path, parallel_state) -> None:
+        """A rollout-0 wipe of one phase leaves the other phase's dumps intact."""
+        args = _make_args(tmp_path)
+        other_phase_file = tmp_path / "fwd_bwd" / "rollout_0" / "keep.pt"
+        other_phase_file.parent.mkdir(parents=True)
+        other_phase_file.write_text("fwd_bwd data")
+
         self._configure(args, phase=DumperPhase.FWD_ONLY, rollout_id=0)
-        assert dumper_utils._dumper_megatron_util_global_state.phases_parent_wiped == {
-            DumperPhase.FWD_BWD,
-            DumperPhase.FWD_ONLY,
-        }
+
+        assert other_phase_file.exists()
