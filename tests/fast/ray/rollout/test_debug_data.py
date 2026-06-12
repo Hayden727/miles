@@ -7,11 +7,9 @@ import torch
 from tests.fast.ray.rollout.conftest import make_args, make_sample, make_samples_grouped
 
 from miles.ray.rollout.debug_data import (
-    assert_injected_rollout_data_files_exist,
+    RolloutDataInjectionUtil,
     load_debug_rollout_data,
-    load_injected_rollout_data,
     save_debug_rollout_data,
-    should_inject_rollout_data,
 )
 
 # ----------------------------- save / load round-trip -----------------------------
@@ -151,7 +149,7 @@ class TestShouldInjectRolloutData:
     def test_false_when_injection_not_configured(self):
         """Without --ci-inject-rollout-data-path, no rollout is injected."""
         args = make_args()
-        assert should_inject_rollout_data(args, rollout_id=0) is False
+        assert RolloutDataInjectionUtil.should_inject(args, rollout_id=0) is False
 
     @pytest.mark.parametrize(("rollout_id", "expected"), [(2, False), (3, True), (4, True)])
     def test_injects_only_at_or_after_start_rollout_id(self, rollout_id: int, expected: bool):
@@ -160,7 +158,7 @@ class TestShouldInjectRolloutData:
             ci_inject_rollout_data_path="/recorded/{rollout_id}.pt",
             ci_inject_rollout_data_start_rollout_id=3,
         )
-        assert should_inject_rollout_data(args, rollout_id=rollout_id) is expected
+        assert RolloutDataInjectionUtil.should_inject(args, rollout_id=rollout_id) is expected
 
 
 class TestLoadInjectedRolloutData:
@@ -169,7 +167,7 @@ class TestLoadInjectedRolloutData:
         template = _save_recording(tmp_path, 3, metadata={"dynamic_global_batch_size": 16})
         args = make_args(ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3)
 
-        data, metadata = load_injected_rollout_data(args, rollout_id=3)
+        data, metadata = RolloutDataInjectionUtil.load(args, rollout_id=3)
 
         assert [s.index for s in data] == [3]
         assert metadata == {"dynamic_global_batch_size": 16}
@@ -180,35 +178,70 @@ class TestLoadInjectedRolloutData:
         args = make_args(ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3)
 
         with pytest.raises(AssertionError, match="rollout_7.pt"):
-            load_injected_rollout_data(args, rollout_id=7)
+            RolloutDataInjectionUtil.load(args, rollout_id=7)
 
 
-class TestAssertInjectedRolloutDataFilesExist:
-    def test_passes_when_all_recordings_exist(self, tmp_path: Path):
-        """Startup check passes when every injected rollout in [start, num_rollout) is recorded."""
-        template = _save_recording(tmp_path, 3)
-        _save_recording(tmp_path, 4)
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=5
+def _make_paired_sample(prompt_tokens: list[int], response_tokens: list[int]):
+    return make_sample(tokens=prompt_tokens + response_tokens, response_length=len(response_tokens))
+
+
+class TestAssertInjectedRolloutDataMatchesGenerated:
+    _PROMPT: list[int] = [101, 102, 103]
+
+    def test_identical_data_passes(self):
+        """Bitwise-identical generated and injected data trivially passes the match check."""
+        samples = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(4)]
+        paired = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(4)]
+
+        RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=samples, injected=paired, rollout_id=3)
+
+    def test_few_flipped_tokens_pass(self):
+        """ulp-drift-level divergence (one flipped token per response) stays above the 0.9 threshold."""
+        generated = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(4)]
+        injected = [_make_paired_sample(self._PROMPT, [999] + list(range(1, 20))) for _ in range(4)]
+
+        RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=generated, injected=injected, rollout_id=3)
+
+    def test_threshold_comes_from_args(self):
+        """A lower --ci-inject-rollout-data-min-match-ratio accepts what the default rejects."""
+        generated = [_make_paired_sample(self._PROMPT, list(range(20)))]
+        injected = [_make_paired_sample(self._PROMPT, list(range(10)) + [999] * 10)]
+
+        RolloutDataInjectionUtil.assert_matches_generated(
+            make_args(ci_inject_rollout_data_min_match_ratio=0.4),
+            generated=generated,
+            injected=injected,
+            rollout_id=3,
         )
 
-        assert_injected_rollout_data_files_exist(args)
+    def test_mostly_diverged_responses_fail(self):
+        """Responses matching at only 50% (wrong engine weights) fail the threshold loudly."""
+        generated = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(4)]
+        injected = [_make_paired_sample(self._PROMPT, list(range(10)) + [999] * 10) for _ in range(4)]
 
-    def test_raises_listing_missing_recordings(self, tmp_path: Path):
-        """Startup check fails fast and names the missing files."""
-        template = _save_recording(tmp_path, 3)
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=5
-        )
+        with pytest.raises(AssertionError, match="match the injected recording"):
+            RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=generated, injected=injected, rollout_id=3)
 
-        with pytest.raises(AssertionError, match="rollout_4.pt"):
-            assert_injected_rollout_data_files_exist(args)
+    def test_length_divergence_counts_as_mismatch(self):
+        """A response twice as long as the recording scores 0.5 even if the shared prefix matches."""
+        generated = [_make_paired_sample(self._PROMPT, list(range(20)))]
+        injected = [_make_paired_sample(self._PROMPT, list(range(10)))]
 
-    def test_skipped_when_num_rollout_unknown(self, tmp_path: Path):
-        """num_rollout=None (derived from num_epoch later) skips the startup check."""
-        template = str(tmp_path / "rollout_{rollout_id}.pt")
-        args = make_args(
-            ci_inject_rollout_data_path=template, ci_inject_rollout_data_start_rollout_id=3, num_rollout=None
-        )
+        with pytest.raises(AssertionError, match="match the injected recording"):
+            RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=generated, injected=injected, rollout_id=3)
 
-        assert_injected_rollout_data_files_exist(args)
+    def test_prompt_mismatch_fails_as_wiring_error(self):
+        """Differing prompt tokens mean broken pairing, not drift — hard fail regardless of responses."""
+        generated = [_make_paired_sample([101, 102, 103], list(range(20)))]
+        injected = [_make_paired_sample([201, 202, 203], list(range(20)))]
+
+        with pytest.raises(AssertionError, match="prompt tokens mismatch"):
+            RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=generated, injected=injected, rollout_id=3)
+
+    def test_sample_count_mismatch_fails(self):
+        """Different sample counts cannot be paired and fail before any token comparison."""
+        generated = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(3)]
+        injected = [_make_paired_sample(self._PROMPT, list(range(20))) for _ in range(2)]
+
+        with pytest.raises(AssertionError, match="sample count mismatch"):
+            RolloutDataInjectionUtil.assert_matches_generated(make_args(), generated=generated, injected=injected, rollout_id=3)
