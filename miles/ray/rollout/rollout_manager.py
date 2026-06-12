@@ -331,12 +331,6 @@ class EnginesAndLock:
 
 @asynccontextmanager
 async def with_paused_health_monitoring(rollout_manager) -> AsyncIterator[None]:
-    """Pause engine health checking around a weight update.
-
-    The update pauses generation on every engine, and sglang's /health_generate fails
-    once generation has been paused for ~20s, so the health monitor would kill a healthy
-    engine in the middle of the weight broadcast.
-    """
     await rollout_manager.health_monitoring_pause.remote()
     try:
         yield
