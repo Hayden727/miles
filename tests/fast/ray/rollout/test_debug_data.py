@@ -21,11 +21,36 @@ class TestRoundTrip:
         save_debug_rollout_data(args_save, original, rollout_id=7, evaluation=False)
         assert (tmp_path / "rollout_7.pt").exists()
 
-        loaded = load_debug_rollout_data(args_load, rollout_id=7)
+        loaded, metadata = load_debug_rollout_data(args_load, rollout_id=7)
         assert len(loaded) == len(original)
+        assert metadata == {}
         for orig, got in zip(original, loaded, strict=True):
             assert got.index == orig.index
             assert got.response_length == orig.response_length
+
+    def test_metadata_round_trip(self, tmp_path: Path):
+        """Metadata passed to save comes back verbatim from load."""
+        path_template = str(tmp_path / "rollout_{rollout_id}.pt")
+        args_save = make_args(save_debug_rollout_data=path_template)
+        args_load = make_args(load_debug_rollout_data=path_template)
+
+        original_metadata = {"dynamic_global_batch_size": 24}
+        save_debug_rollout_data(
+            args_save, make_samples_grouped(1, 2), rollout_id=3, evaluation=False, metadata=original_metadata
+        )
+
+        _loaded, metadata = load_debug_rollout_data(args_load, rollout_id=3)
+        assert metadata == original_metadata
+
+    def test_load_file_without_metadata_key_returns_empty_metadata(self, tmp_path: Path):
+        """Files recorded before metadata support load with metadata defaulting to {}."""
+        path = tmp_path / "rollout_5.pt"
+        torch.save(dict(rollout_id=5, samples=[make_sample().to_dict()]), path)
+        args_load = make_args(load_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"))
+
+        loaded, metadata = load_debug_rollout_data(args_load, rollout_id=5)
+        assert len(loaded) == 1
+        assert metadata == {}
 
     def test_evaluation_path_round_trip_flattens_dataset_dict(self, tmp_path: Path):
         """eval-mode save flattens dict-of-{name: {samples: [...]}} into one list.
@@ -46,7 +71,7 @@ class TestRoundTrip:
         saved_path = tmp_path / "eval_4.pt"
         assert saved_path.exists()
 
-        loaded = load_debug_rollout_data(args_load, rollout_id="eval_4")
+        loaded, _metadata = load_debug_rollout_data(args_load, rollout_id="eval_4")
         assert len(loaded) == 5
         assert sorted(s.index for s in loaded) == [0, 1, 2, 10, 11]
         # ds_a samples come first (insertion order is preserved by dict iteration)
@@ -87,7 +112,7 @@ class TestSubsample:
     def test_ratio_one_returns_full_data(self, saved_path_factory):
         template = saved_path_factory(10)
         args = make_args(load_debug_rollout_data=template, load_debug_rollout_data_subsample=1.0)
-        loaded = load_debug_rollout_data(args, rollout_id=0)
+        loaded, _metadata = load_debug_rollout_data(args, rollout_id=0)
         assert len(loaded) == 10
 
     def test_ratio_half_takes_first_and_last_chunks(self, saved_path_factory):
@@ -98,6 +123,6 @@ class TestSubsample:
         data[-3:]`` = 5 items: indices [0, 1, 7, 8, 9]."""
         template = saved_path_factory(10)
         args = make_args(load_debug_rollout_data=template, load_debug_rollout_data_subsample=0.5)
-        loaded = load_debug_rollout_data(args, rollout_id=0)
+        loaded, _metadata = load_debug_rollout_data(args, rollout_id=0)
         assert len(loaded) == 5
         assert [s.index for s in loaded] == [0, 1, 7, 8, 9]

@@ -113,7 +113,7 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metadata, metrics = await self._get_rollout_data(rollout_id=rollout_id)
-        save_debug_rollout_data(self.args, data, rollout_id=rollout_id, evaluation=False)
+        save_debug_rollout_data(self.args, data, rollout_id=rollout_id, evaluation=False, metadata=metadata)
         log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         data = convert_samples_to_train_data(
             self.args,
@@ -151,8 +151,7 @@ class RolloutManager:
 
     async def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
-            data = load_debug_rollout_data(self.args, rollout_id=rollout_id)
-            metadata = {}  # save/load metadata into debug rollout data as well
+            data, metadata = load_debug_rollout_data(self.args, rollout_id=rollout_id)
             metrics = None
         else:
             if self.use_experimental_refactor:

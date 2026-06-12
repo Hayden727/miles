@@ -8,12 +8,14 @@ from miles.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
-def load_debug_rollout_data(args, rollout_id: int):
-    data = torch.load(
+def load_debug_rollout_data(args, rollout_id: int) -> tuple[list[Sample], dict]:
+    payload = torch.load(
         args.load_debug_rollout_data.format(rollout_id=rollout_id),
         weights_only=False,
-    )["samples"]
-    data = [Sample.from_dict(sample) for sample in data]
+    )
+    data = [Sample.from_dict(sample) for sample in payload["samples"]]
+    # Files recorded before metadata recording have no "metadata" key.
+    metadata = payload.get("metadata") or {}
     if (ratio := args.load_debug_rollout_data_subsample) is not None:
         original_num_rows = len(data)
         rough_subsample_num_rows = int(original_num_rows * ratio)
@@ -21,10 +23,10 @@ def load_debug_rollout_data(args, rollout_id: int):
         logger.info(
             f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
         )
-    return data
+    return data, metadata
 
 
-def save_debug_rollout_data(args, data, rollout_id, evaluation: bool):
+def save_debug_rollout_data(args, data, rollout_id, evaluation: bool, metadata: dict | None = None) -> None:
     # TODO to be refactored (originally Buffer._set_data)
     if (path_template := args.save_debug_rollout_data) is not None:
         path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
@@ -41,4 +43,4 @@ def save_debug_rollout_data(args, data, rollout_id, evaluation: bool):
                 samples=[sample.to_dict() for sample in data],
             )
 
-        torch.save(dict(rollout_id=rollout_id, **dump_data), path)
+        torch.save(dict(rollout_id=rollout_id, metadata=metadata or {}, **dump_data), path)
