@@ -41,14 +41,6 @@ def save_debug_rollout_data(args, data, rollout_id, evaluation: bool, metadata: 
 
 
 class RolloutDataInjectionUtil:
-    """CI comparison tests only: replace individual rollouts' training data with a recording
-    (--ci-inject-rollout-data-*) while engines and generation stay real."""
-
-    # Mean response-token match ratio below which the discarded generation is treated as
-    # evidence of wrong engine weights. Legitimate divergence (ulp-level weight drift flipping
-    # individual sampled tokens, then cascading within a response) keeps the ratio high; grossly
-    # wrong weights (e.g. a broken post-fault update_weights) make responses unrelated (ratio
-    # near 0).
     _MIN_RESPONSE_TOKEN_MATCH_RATIO: float = 0.9
 
     @staticmethod
@@ -65,9 +57,7 @@ class RolloutDataInjectionUtil:
 
     @staticmethod
     def assert_files_exist(args) -> None:
-        """Fail fast at startup instead of mid-training when a recording is missing."""
         if args.num_rollout is None:
-            # num_rollout is derived from num_epoch later; the per-rollout assert still covers it.
             return
 
         missing = [
@@ -79,15 +69,12 @@ class RolloutDataInjectionUtil:
 
     @classmethod
     def assert_matches_generated(cls, *, generated: list[Sample], injected: list[Sample], rollout_id: int) -> None:
-        """Sanity-check that the discarded generated data stays close to the injected recording."""
         assert len(generated) == len(
             injected
         ), f"rollout {rollout_id}: sample count mismatch, generated {len(generated)} vs injected {len(injected)}"
 
         ratios: list[float] = []
         for index, (generated_sample, injected_sample) in enumerate(zip(generated, injected, strict=True)):
-            # Prompts must be identical: a mismatch means broken pairing/wiring (wrong file,
-            # different data order), which no drift can explain.
             assert cls._prompt_tokens(generated_sample) == cls._prompt_tokens(injected_sample), (
                 f"rollout {rollout_id}: prompt tokens mismatch at sample {index}; "
                 "injected recording does not pair with the generated batch"
