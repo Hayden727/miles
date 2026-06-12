@@ -1532,15 +1532,6 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 "cell_index -1 means last cell.",
             )
             parser.add_argument(
-                "--ci-engine-kill-rollout-ids",
-                type=int,
-                nargs="+",
-                default=None,
-                help="CI-only. Rollout ids at which the --ci-test fault injection crashes "
-                "rollout engine 0. When set, replaces the legacy one-shot injection that "
-                "fires once at rollout id >= 2.",
-            )
-            parser.add_argument(
                 "--ci-inject-rollout-data-path",
                 type=str,
                 default=None,
@@ -2280,12 +2271,6 @@ def miles_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
-
-    if args.ci_engine_kill_rollout_ids is not None:
-        assert args.ci_test and args.use_fault_tolerance and not args.debug_train_only, (
-            "--ci-engine-kill-rollout-ids requires --ci-test, --use-fault-tolerance and real "
-            "rollout engines (the rollout health monitor performs the post-kill recovery)"
-        )
 
     assert (args.ci_inject_rollout_data_path is None) == (args.ci_inject_rollout_data_start_rollout_id is None), (
         "--ci-inject-rollout-data-path and --ci-inject-rollout-data-start-rollout-id " "must be set together."

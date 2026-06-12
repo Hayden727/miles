@@ -90,7 +90,6 @@ class RolloutManager:
 
         # TODO will be replaced by full ft, thus temporarily leave it without modifications
         self._health_monitors = []
-        self._ci_fault_injection_pending = False
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             for srv in self.servers.values():
                 for group in srv.server_groups:
@@ -115,8 +114,8 @@ class RolloutManager:
         start_time = time.time()
         self.rollout_id = rollout_id
         self._health_monitoring_resume()
-        if self.args.ci_test and self.args.use_fault_tolerance:
-            self._try_ci_fault_injection(rollout_id)
+        if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
+            self._try_ci_fault_injection()
         data, metadata, metrics = await self._get_rollout_data(rollout_id=rollout_id)
         save_debug_rollout_data(self.args, data, rollout_id=rollout_id, evaluation=False, metadata=metadata)
         log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
@@ -308,17 +307,13 @@ class RolloutManager:
         return next(iter(self.servers.values()))
 
     # TODO will be replaced by full ft, thus temporarily leave it without modifications
-    def _try_ci_fault_injection(self, rollout_id: int):
+    def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
-        if (kill_rollout_ids := self.args.ci_engine_kill_rollout_ids) is not None:
-            # Scheduled mode: crash engine 0 at each listed rollout id.
-            if rollout_id not in kill_rollout_ids:
-                return
-        else:
-            # Legacy one-shot mode: fire once, no earlier than rollout 2.
-            if rollout_id < 2 or not self._ci_fault_injection_pending:
-                return
-            self._ci_fault_injection_pending = False
+        if not self._ci_fault_injection_pending:
+            return
+
+        # Only inject fault once
+        self._ci_fault_injection_pending = False
 
         if (
             self._server
@@ -335,7 +330,7 @@ class RolloutManager:
                 logger.info(f"CI Fault Injection: Waiting {wait_time}s for health monitor to detect crash")
                 time.sleep(wait_time)
             except Exception as e:
-                logger.warning(f"CI Fault Injection failed: {e}", exc_info=True)
+                logger.warning(f"CI Fault Injection failed: {e}")
 
 
 @dataclass(frozen=True)
