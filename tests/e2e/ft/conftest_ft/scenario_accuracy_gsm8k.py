@@ -76,9 +76,7 @@ def prepare() -> None:
 def run_ci(
     seed: Annotated[int, typer.Option(help="Random seed for the fault schedule")] = _DEFAULT_FAULT_SEED,
     num_rollout: Annotated[int, typer.Option(help="Number of rollouts")] = 250,
-    metric_threshold: Annotated[
-        float, typer.Option(help="eval/gsm8k accuracy threshold")
-    ] = _DEFAULT_METRIC_THRESHOLD,
+    metric_threshold: Annotated[float, typer.Option(help="eval/gsm8k accuracy threshold")] = _DEFAULT_METRIC_THRESHOLD,
 ) -> None:
     """GSM8K accuracy-gain test under fault injection.
 
