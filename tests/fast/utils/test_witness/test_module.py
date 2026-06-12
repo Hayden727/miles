@@ -1,10 +1,13 @@
 """Tests for miles.utils.witness.module."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 import torch.nn as nn
+from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer, Range
+from megatron.core.optimizer.optimizer import ChainedOptimizer
 
 from miles.utils.witness.allocator import WitnessInfo
 from miles.utils.witness.module import (
@@ -325,6 +328,82 @@ class TestZeroWitnessRows:
         for key in ("exp_avg", "exp_avg_sq"):
             assert state[key][3].item() == 0.0
             assert state[key][0].item() != 0.0
+
+
+class TestZeroWitnessRowsMegatronOptimizers:
+    @staticmethod
+    def _make_distributed_optimizer(
+        model_weight: nn.Parameter,
+        *,
+        start: int,
+        end: int,
+        config: SimpleNamespace,
+    ) -> tuple[DistributedOptimizer, torch.Tensor]:
+        optimizer = DistributedOptimizer.__new__(DistributedOptimizer)
+        main_shard = model_weight.detach().view(-1)[start:end].clone().float().requires_grad_()
+        inner = torch.optim.Adam([main_shard], lr=0.01)
+        inner.state[main_shard] = {
+            "exp_avg": torch.ones(end - start),
+            "exp_avg_sq": torch.ones(end - start),
+        }
+        optimizer.optimizer = inner
+        optimizer.config = config
+        optimizer.model_param_gbuf_map = {model_weight: (0, torch.bfloat16, 0)}
+        optimizer.gbuf_ranges = [{torch.bfloat16: [{"param_map": {model_weight: {"param": Range(start, end)}}}]}]
+        optimizer.model_param_group_index_map = {model_weight: (0, 0)}
+        return optimizer, main_shard
+
+    def test_zero_witness_rows_clears_distributed_optimizer_shard_rows(self) -> None:
+        """Stale rows inside the local dist-opt shard are zeroed in the fp32 shard and its Adam state."""
+        witness = _DataWitness(buffer_size=10)
+        witness.witness.weight.data.fill_(1.0)
+        config = SimpleNamespace(use_precision_aware_optimizer_no_fp8_or_ds_fp8=False)
+        dist_opt, main_shard = self._make_distributed_optimizer(
+            witness.witness.weight, start=4, end=10, config=config
+        )
+        optimizer = ChainedOptimizer([dist_opt])
+
+        _zero_witness_rows(witness=witness, idx=torch.tensor([2, 5, 7]), optimizer=optimizer)
+
+        weight = witness.witness.weight
+        for stale_row in (2, 5, 7):
+            assert weight.data[stale_row].item() == 0.0
+        assert weight.data[4].item() == 1.0
+        # The shard covers rows [4, 10): row 5 -> local 1, row 7 -> local 3; row 2 is outside.
+        state = dist_opt.optimizer.state[main_shard]
+        for tensor in (main_shard, state["exp_avg"], state["exp_avg_sq"]):
+            assert tensor[1].item() == 0.0
+            assert tensor[3].item() == 0.0
+            assert tensor[0].item() == 1.0
+
+    def test_zero_witness_rows_skips_distributed_optimizer_without_the_param(self) -> None:
+        """A chained dist-opt instance owning no shard of the witness param is skipped, the owner still clears."""
+        witness = _DataWitness(buffer_size=10)
+        witness.witness.weight.data.fill_(1.0)
+        config = SimpleNamespace(use_precision_aware_optimizer_no_fp8_or_ds_fp8=False)
+        dist_opt, main_shard = self._make_distributed_optimizer(
+            witness.witness.weight, start=0, end=10, config=config
+        )
+        expert_opt = DistributedOptimizer.__new__(DistributedOptimizer)
+        expert_opt.config = config
+        expert_opt.model_param_gbuf_map = {}
+        optimizer = ChainedOptimizer([dist_opt, expert_opt])
+
+        _zero_witness_rows(witness=witness, idx=torch.tensor([3]), optimizer=optimizer)
+
+        assert witness.witness.weight.data[3].item() == 0.0
+        assert main_shard[3].item() == 0.0
+
+    def test_zero_witness_rows_raises_when_populated_state_misses_witness_param(self) -> None:
+        """A populated optimizer state without the witness entry fails loudly instead of silently skipping."""
+        witness = _DataWitness(buffer_size=10)
+        unrelated = nn.Parameter(torch.ones(4))
+        optimizer = torch.optim.Adam([unrelated], lr=0.01)
+        unrelated.grad = torch.ones(4)
+        optimizer.step()
+
+        with pytest.raises(AssertionError, match="witness param missing"):
+            _zero_witness_rows(witness=witness, idx=torch.tensor([1]), optimizer=optimizer)
 
 
 # ---------------------------------------------------------------------------

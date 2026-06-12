@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 from megatron.core import tensor_parallel
+from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer
+from megatron.core.optimizer.optimizer import ChainedOptimizer, MegatronOptimizer
 from megatron.core.transformer.utils import sharded_state_dict_default
 from torch import Tensor
 
@@ -184,19 +186,69 @@ def _zero_witness_rows(*, witness: _DataWitness, idx: Tensor, optimizer: torch.o
     model_weight = witness.witness.weight
     model_weight.data[idx] = 0.0
 
-    main_param = getattr(model_weight, "main_param", None)
+    for inner_optimizer in _iter_inner_optimizers(optimizer):
+        if isinstance(inner_optimizer, DistributedOptimizer):
+            _zero_rows_in_distributed_optimizer(optimizer=inner_optimizer, model_param=model_weight, idx=idx)
+        elif isinstance(inner_optimizer, MegatronOptimizer):
+            _zero_rows_keyed_by_main_param(model_param=model_weight, idx=idx, state=inner_optimizer.optimizer.state)
+        else:
+            _zero_rows_keyed_by_main_param(model_param=model_weight, idx=idx, state=inner_optimizer.state)
+
+
+def _iter_inner_optimizers(optimizer: torch.optim.Optimizer) -> list[torch.optim.Optimizer]:
+    if isinstance(optimizer, ChainedOptimizer):
+        return list(optimizer.chained_optimizers)
+    return [optimizer]
+
+
+def _zero_rows_in_distributed_optimizer(*, optimizer: DistributedOptimizer, model_param: Tensor, idx: Tensor) -> None:
+    assert not optimizer.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8
+    if model_param not in optimizer.model_param_gbuf_map:
+        # This dist-opt instance (e.g. the expert one) or this rank owns no shard of the param.
+        return
+
+    # The fp32 main weights are flat shards of the flattened model param;
+    # embedding_dim == 1 makes flattened offsets equal witness row ids.
+    assert model_param.shape[-1] == 1, f"witness weight last dim must be 1, got {model_param.shape}"
+    param_range = optimizer._get_model_param_range_map(model_param)["param"]
+    local_idx = idx[(idx >= param_range.start) & (idx < param_range.end)] - param_range.start
+    if local_idx.numel() == 0:
+        return
+
+    group_index, group_order = optimizer.model_param_group_index_map[model_param]
+    main_param = optimizer.optimizer.param_groups[group_index]["params"][group_order]
+    assert main_param.numel() == param_range.size
+    main_param.data[local_idx] = 0.0
+    _zero_state_rows(state=optimizer.optimizer.state, optimizer_key=main_param, idx=local_idx)
+
+
+def _zero_rows_keyed_by_main_param(
+    *,
+    model_param: Tensor,
+    idx: Tensor,
+    state: dict[Tensor, dict[str, Tensor]],
+) -> None:
+    main_param = getattr(model_param, "main_param", None)
     if main_param is not None:
-        assert main_param is not model_weight
+        assert main_param is not model_param
+        assert main_param.shape == model_param.shape, "expected a full fp32 copy, not a shard"
         main_param.data[idx] = 0.0
 
-    # Distributed optimizer keys state by main_param (fp32 copy);
-    # non-distributed optimizer keys by model_weight directly.
-    optimizer_key = main_param if main_param is not None else model_weight
-    if optimizer_key in optimizer.state:
-        state = optimizer.state[optimizer_key]
-        for key in ("exp_avg", "exp_avg_sq"):
-            if key in state:
-                state[key][idx] = 0.0
+    optimizer_key = main_param if main_param is not None else model_param
+    _zero_state_rows(state=state, optimizer_key=optimizer_key, idx=idx)
+
+
+def _zero_state_rows(*, state: dict[Tensor, dict[str, Tensor]], optimizer_key: Tensor, idx: Tensor) -> None:
+    if optimizer_key not in state:
+        # An optimizer that never stepped has no per-param state yet; a populated state
+        # missing the witness entry means we are clearing the wrong key — fail loudly.
+        assert len(state) == 0, f"witness param missing from optimizer state with {len(state)} entries"
+        return
+
+    param_state = state[optimizer_key]
+    for key in ("exp_avg", "exp_avg_sq"):
+        if key in param_state:
+            param_state[key][idx] = 0.0
 
 
 def _record_and_log_witness_param(
