@@ -197,24 +197,33 @@ What stays real on the target during injected rollouts: engines and generation i
 generated samples are discarded after the fact), update_weights after the degraded commit
 and after healing, and health-monitor pause/resume — i.e. the whole
 crash→retry→heal→weight-sync path. The discarded generation is not wasted: each injected
-rollout asserts the generated responses match the recording at a mean per-token ratio
-> 0.9 with bitwise-identical prompts (`RolloutDataInjectionUtil.assert_matches_generated`).
-ulp-level drift only flips occasional sampled tokens (then cascades within one response),
-keeping the ratio high, while grossly wrong post-fault engine weights (e.g. a broken
-update_weights) would drop it to near zero — so wrong-weights bugs still fail the test
-even though the injected data replaces the generated content for training. What the
-scenario does not assert is the exact post-fault sampled content beyond that ratio.
-Pre-fault rollouts (up to and including the crash rollout, whose data is generated before
-the crash and redriven by the retry) are not injected — they remain a real sampled-data
-comparison.
+rollout asserts the generated responses match the recording at a mean per-token positional
+ratio above a calibrated threshold with bitwise-identical prompts
+(`RolloutDataInjectionUtil.assert_matches_generated`). ulp-level drift only flips an
+occasional sampled token (which then cascades within that one response), keeping the mean
+ratio high, while grossly wrong post-fault engine weights (e.g. a broken update_weights)
+make responses unrelated to the recording and drop it by two orders of magnitude — so
+wrong-weights bugs still fail the test even though the injected data replaces the
+generated content for training. What the scenario does not assert is the exact post-fault
+sampled content beyond that ratio. Pre-fault rollouts (up to and including the crash
+rollout, whose data is generated before the crash and redriven by the retry) are not
+injected — they remain a real sampled-data comparison.
 
-The match guard is why this scenario needs the **dense** model: the guard only separates
-"correct weights" from "wrong weights" if legitimate ulp drift keeps the match ratio high.
-Measured on the truncated 5-layer MoE (2026-06-12, 256 samples): the first post-fault
-rollout's mean response-token match was **0.19** (min 0.005) under correct weights — the
-uncalibrated logits and MoE-router near-ties amplify ulp drift into wholesale token
-divergence, so no threshold separates the two regimes. The calibrated dense model keeps
-legitimate drift at occasional flips, so the > 0.9 threshold is sharp.
+The guard's calibration (measured 2026-06-12, first post-fault rollout, 256 samples,
+correct weights — note the metric counts everything after a response's first flipped
+token as mismatched, so even rare flips cost a large fraction):
+
+| Model | mean response-token match | min |
+|-------|---------------------------|-----|
+| dense Qwen3-0.6B | **0.63** | 0.035 |
+| 5-layer MoE | **0.19** | 0.005 |
+
+This is why the scenario needs the **dense** model: on the truncated MoE the uncalibrated
+logits and router near-ties amplify ulp drift into near-wholesale divergence (0.19), which
+is not separable from the unrelated-content regime, while the dense model's 0.63 sits two
+orders of magnitude above it. The scenario passes
+`--ci-inject-rollout-data-min-match-ratio 0.4` — comfortably below the legitimate 0.63
+and far above what any gross weight corruption can produce.
 
 ### `scenario_deterministic`
 

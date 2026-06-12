@@ -64,10 +64,14 @@ def _build_phase_args(mode: FTTestMode, dump_dir: str, *, is_target: bool, enabl
             base += f"--ci-ft-test-actions '{json.dumps(_WITH_FAILURE_ACTIONS)}' "
             if mode.has_real_rollout:
                 # Post-fault rollouts inject the baseline's recorded data (see README).
+                # Match threshold calibrated on the dense model (2026-06-12, 256 samples):
+                # correct weights measure mean 0.63 (one ulp-flip then cascade per response);
+                # unrelated content measures ~0.005-0.03. 0.4 separates both by a wide margin.
                 baseline_dump_dir = dump_dir.replace("/target/", "/baseline/")
                 base += (
                     f"--ci-inject-rollout-data-path {baseline_dump_dir}/rollout_data/{{rollout_id}}.pt "
                     f"--ci-inject-rollout-data-start-rollout-id {NUM_PHASE_A_STEPS + 2} "
+                    "--ci-inject-rollout-data-min-match-ratio 0.4 "
                 )
 
     return base
