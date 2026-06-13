@@ -262,9 +262,14 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     async def check_weights(self, action: str, allow_quant_error: bool = False):
-        return await asyncio.gather(
-            *[srv.check_weights(action=action, allow_quant_error=allow_quant_error) for srv in self.servers.values()]
-        )
+        # The snapshot/reset/compare round-trip only makes sense for the model
+        # that actually receives a training weight update. A frozen model (e.g.
+        # the "ref" in mixed-offload) is restored from disk at load time and
+        # never re-synced, so resetting + comparing it would always mismatch.
+        srv = self._get_updatable_server()
+        if srv is None:
+            return []
+        return await srv.check_weights(action=action, allow_quant_error=allow_quant_error)
 
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
