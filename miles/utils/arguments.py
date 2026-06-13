@@ -2298,6 +2298,11 @@ def miles_validate_args(args):
             "--ci-dump-engine-weight-checksums checksums live rollout engines after each "
             "update_weights; it cannot be combined with --debug-train-only or --debug-rollout-only."
         )
+        assert not args.debug_skip_weight_update, (
+            "--ci-dump-engine-weight-checksums checksums live rollout engines after each "
+            "update_weights; it cannot be combined with --debug-skip-weight-update, which "
+            "skips the actual weight push and would make the dumps record stale weights."
+        )
 
     args.use_critic = args.advantage_estimator == "ppo"
     if args.critic_num_gpus_per_node is None:
