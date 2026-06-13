@@ -120,9 +120,9 @@ def _compare_engine_checksum_file(*, baseline_path: Path, target_path: Path, con
     assert target.get("success") is True, f"{context}: target checksum response not successful: {target}"
     baseline_ranks: list[dict] = baseline["ranks"]
     target_ranks: list[dict] = target["ranks"]
-    assert len(baseline_ranks) == len(target_ranks), (
-        f"{context}: rank count mismatch: baseline={len(baseline_ranks)} vs target={len(target_ranks)}"
-    )
+    assert len(baseline_ranks) == len(
+        target_ranks
+    ), f"{context}: rank count mismatch: baseline={len(baseline_ranks)} vs target={len(target_ranks)}"
 
     num_tensor_checksums = 0
     mismatches: list[str] = []

@@ -153,7 +153,10 @@ class TestCompareEngineChecksumDumps:
         baseline = _write_dump(
             tmp_path,
             "baseline",
-            rollouts={"rollout_1": [_make_engine_response(_CHECKSUMS)], "rollout_2": [_make_engine_response(_CHECKSUMS)]},
+            rollouts={
+                "rollout_1": [_make_engine_response(_CHECKSUMS)],
+                "rollout_2": [_make_engine_response(_CHECKSUMS)],
+            },
         )
         target = _write_dump(tmp_path, "target", rollouts={"rollout_1": [_make_engine_response(_CHECKSUMS)]})
 
@@ -209,7 +212,9 @@ class TestCompareEngineChecksumDumps:
         baseline = _write_dump(
             tmp_path, "baseline", rollouts={"rollout_1": [_make_engine_response(_CHECKSUMS, num_ranks=2)]}
         )
-        target = _write_dump(tmp_path, "target", rollouts={"rollout_1": [_make_engine_response(_CHECKSUMS, num_ranks=1)]})
+        target = _write_dump(
+            tmp_path, "target", rollouts={"rollout_1": [_make_engine_response(_CHECKSUMS, num_ranks=1)]}
+        )
 
         with pytest.raises(AssertionError, match="rank count mismatch"):
             compare_engine_checksum_dumps(baseline_dir=baseline, target_dir=target)
