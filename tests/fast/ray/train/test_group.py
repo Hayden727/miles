@@ -234,7 +234,7 @@ class TestRefreshCellsReconfigure:
         group.stop_cell(1)
 
         # Step 2: Refresh
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         # Step 3: Quorum bumped (init was quorum 0, this is first reconfigure)
         assert group._indep_dp_quorum_id == 1
@@ -260,7 +260,7 @@ class TestRefreshCellsReconfigure:
     async def test_no_reconfigure_when_unchanged(self):
         group = await _make_alive_group(num_cells=2)
 
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         assert group._indep_dp_quorum_id == 0
 
@@ -275,7 +275,7 @@ class TestRefreshCellsHealing:
         group.start_cell(2)
 
         # Step 2: Refresh heals the pending cell
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         # Step 3: All 3 cells are now alive
         assert all(c.is_alive for c in group._cells)
@@ -305,7 +305,7 @@ class TestRefreshCellsHealing:
         group.start_cell(1)
         group.start_cell(2)
 
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         assert all(c.is_alive for c in group._cells)
         for cell in group._cells:
@@ -326,7 +326,7 @@ class TestRefreshCellsHealing:
         group.stop_cell(1)
         group.start_cell(1)
 
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         assert group._cells[1].is_alive
         for handle in group._cells[1]._get_actor_handles():
@@ -342,7 +342,7 @@ class TestRefreshCellsHealing:
         group.stop_cell(2)
         group.start_cell(2)
 
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         assert group._cells[0].is_alive
         assert group._cells[1].is_stopped
@@ -366,8 +366,8 @@ class TestRefreshCellsNoOp:
                 init_call_counts[id(handle)] = len(calls)
 
         # Two refreshes — neither should change anything
-        await group._refresh_cells()
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 0
 
         # No new calls dispatched
@@ -379,10 +379,10 @@ class TestRefreshCellsNoOp:
     async def test_refresh_after_reconfigure_is_noop_on_second_call(self):
         group = await _make_alive_group(num_cells=3)
         group.stop_cell(1)
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 1
 
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 1
 
 
@@ -393,20 +393,20 @@ class TestConsecutiveStopStartCycles:
 
         # Step 1: Stop cell 1
         group.stop_cell(1)
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 1
         assert group._cells[0].indep_dp_info.alive_cell_indices == [0, 2]
 
         # Step 2: Stop cell 2 (only cell 0 alive)
         group.stop_cell(2)
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 2
         assert group._cells[0].indep_dp_info.alive_cell_indices == [0]
         assert group._cells[0].indep_dp_info.alive_size == 1
 
         # Step 3: Start cell 1 (cells 0 and 1 alive)
         group.start_cell(1)
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
         assert group._indep_dp_quorum_id == 3
         assert group._cells[0].is_alive
         assert group._cells[1].is_alive
@@ -607,7 +607,7 @@ class TestRefreshCellsErrorHandling:
         group._cells[2].actor_factory = _make_failing_actor_factory()
 
         # Step 3: Refresh — healing init fails, cell auto-marks errored
-        await group._refresh_cells()
+        await group._refresh_cells(rollout_id=0)
 
         # Step 4: Cell 2 errored, cells 0 and 1 still alive
         assert group._cells[0].is_alive

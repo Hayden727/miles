@@ -60,6 +60,19 @@ class TrainGroupStepEndEvent(EventBase):
     cell_outcomes: dict[int, Literal["error"] | list[TrainStepOutcome]]
 
 
+class CellReconfigureEvent(EventBase):
+    """Witness that a cell-topology reconfigure (shrink or healing) actually executed."""
+
+    type: Literal["cell_reconfigure"] = "cell_reconfigure"
+    rollout_id: int
+    quorum_id: int
+    # Checkpoint-source cell for healing; None for a pure shrink (no pending cells).
+    src_cell_index: int | None
+    # Cells pulled back from pending in this reconfigure; healing happened iff non-empty.
+    healed_cell_indices: list[int]
+    alive_cell_indices_after: list[int]
+
+
 class TrainAdvantageComputationEvent(_ActorTrainEventBase):
     type: Literal["train_advantage_computation"] = "train_advantage_computation"
     advantages: list[list[float]]
@@ -78,6 +91,7 @@ Event = Annotated[
     | WitnessSnapshotParamEvent
     | WitnessAllocateIdEvent
     | TrainGroupStepEndEvent
+    | CellReconfigureEvent
     | TrainAdvantageComputationEvent
     | MetricEvent,
     Discriminator("type"),
