@@ -32,6 +32,8 @@ def check(events: list[Event]) -> list[ChecksumMismatchIssue]:
 
 
 def _check_one_rollout(events: list[EngineWeightChecksumEvent]) -> Iterable[ChecksumMismatchIssue]:
+    # Assumes the engine set is constant within a rollout; if engine-side fault injection ever
+    # changes it, align by parallelism_info instead of engine_index.
     by_engine = sorted(events, key=lambda e: e.engine_index)
     baseline = by_engine[0]
     for other in by_engine[1:]:
