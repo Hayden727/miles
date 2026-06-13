@@ -7,6 +7,7 @@ from miles.backends.megatron_utils.types import TrainStepOutcome
 from miles.utils.event_logger.models import (
     CellReconfigureEvent,
     Event,
+    InferenceEngineWeightChecksumEvent,
     TrainGroupStepEndEvent,
     WitnessAllocateIdEvent,
     WitnessSnapshotParamEvent,
@@ -139,6 +140,25 @@ class TestCellReconfigureEvent:
         assert parsed.alive_cell_indices_after == [0]
 
 
+class TestInferenceEngineWeightChecksumEvent:
+    def test_json_roundtrip(self) -> None:
+        """An engine weight checksum event survives a JSON round-trip with its per-engine checksums intact."""
+        engine_checksums = [
+            {"rank0/embed.weight": "aaa"},
+            {"rank0/embed.weight": "aaa", "rank1/embed.weight": "bbb"},
+        ]
+        event = InferenceEngineWeightChecksumEvent(
+            timestamp=_FIXED_TS,
+            source=_FIXED_SOURCE,
+            rollout_id=4,
+            engine_checksums=engine_checksums,
+        )
+        parsed = _event_adapter.validate_json(event.model_dump_json())
+        assert isinstance(parsed, InferenceEngineWeightChecksumEvent)
+        assert parsed.rollout_id == 4
+        assert parsed.engine_checksums == engine_checksums
+
+
 class TestWitnessSnapshotParamEventWithStaleIds:
     def test_json_roundtrip(self) -> None:
         event = WitnessSnapshotParamEvent(
@@ -171,6 +191,12 @@ class TestDiscriminatedUnionParsesAllEvents:
                 source=_FIXED_SOURCE,
                 rollout_id=0,
                 cell_outcomes={0: [TrainStepOutcome.NORMAL]},
+            ),
+            InferenceEngineWeightChecksumEvent(
+                timestamp=_FIXED_TS,
+                source=_FIXED_SOURCE,
+                rollout_id=0,
+                engine_checksums=[{"rank0/w": "aaa"}],
             ),
         ]
         for event in events:

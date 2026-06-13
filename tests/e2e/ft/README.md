@@ -206,11 +206,9 @@ strict grad/activation/metric comparison with zero threshold relaxation.
 What stays real on the target during injected rollouts: engines and generation itself (the
 generated samples are discarded after the fact), update_weights after the degraded commit
 and after healing, and health-monitor pause/resume — i.e. the whole
-crash→retry→heal→weight-sync path. Known gap: the update_weights that runs after the
-rollout-3 (post-healing) train step is executed but its output is not consumed by any
-later rollout, so a regression there is only caught by the generation match guard at
-rollout 3 (post-degraded-commit weights) and by `realistic_gsm8k` accuracy, not by this
-scenario's strict comparison. Injected rollouts' dump comparison gives a
+crash→retry→heal→weight-sync path. The post-healing update_weights is now consumed:
+real_rollout mode asserts the target pushed bitwise-identical engine weights to the
+baseline (see "inference engine weight checksum" below). Injected rollouts' dump comparison gives a
 `max_abs <= 3e-3` floor to the **measured noisy grad families only** (decoder-layer
 QK-norms, folded `layer_norm_weight`s, and the attention/MLP weight matrices): the
 training data is bitwise-identical, but the target's weights carry the fault-inherent ulp
@@ -293,6 +291,12 @@ state-copy bug is easy to make and an approximate check would miss it, hence zer
 Bitwise verification: --use-fault-tolerance --ft-components train auto-enables
 --save-local-weight-checksum and --enable-event-analyzer. The event_analyzer
 cross_replica_weight_checksum rule checks cell-to-cell bitwise equality after healing.
+
+Inference engine weight checksum (real_rollout mode only): each update_weights logs one
+InferenceEngineWeightChecksumEvent per rollout (all engines). _compare asserts per phase that baseline
+and target pushed bitwise-identical weights for every (rollout, engine) pair; the
+event_analyzer inference_engine_weight_checksum_consistency rule independently checks that all engines
+of a rollout agree (the production-facing function A).
 
 Healing witness: each target phase heals once, so each target event dir must contain
 exactly one CellReconfigureEvent — a healing at rollout P+2 (healed = last cell, ckpt src =

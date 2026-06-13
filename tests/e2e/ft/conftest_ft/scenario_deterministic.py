@@ -13,6 +13,7 @@ from miles.utils.test_utils.comparisons.dumps import (
     INPUT_TENSORS_SKIP_PATTERN,
     compare_dumps,
 )
+from miles.utils.test_utils.comparisons.inference_engine_checksums import compare_inference_engine_checksums
 from miles.utils.test_utils.comparisons.metrics import compare_metrics
 from miles.utils.test_utils.reconfigure_assertions import ReconfigureInfo, assert_reconfigure_events
 
@@ -149,6 +150,12 @@ def _compare(dump_dir: str, mode: FTTestMode) -> None:
             allow_skipped_pattern=INPUT_TENSORS_SKIP_PATTERN,
             allow_failed_pattern=INPUT_TENSORS_ALLOW_FAILED_PATTERN,
         )
+
+        if mode.has_real_rollout:
+            compare_inference_engine_checksums(
+                baseline_dir=baseline_dir,
+                target_dir=target_dir,
+            )
     print("Deterministic healing comparison test PASSED")
 
 

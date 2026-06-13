@@ -2,8 +2,13 @@
 
 from datetime import datetime, timezone
 
-from miles.utils.event_analyzer.rules.cross_replica_weight_checksum import _flatten_event, _flatten_nested, check
-from miles.utils.event_logger.models import LocalWeightChecksumEvent, LocalWeightChecksumState, OptimizerStateInfo
+from miles.utils.event_analyzer.rules.checksum_compare import flatten_nested as _flatten_nested
+from miles.utils.event_analyzer.rules.cross_replica_weight_checksum import _flatten_event, check
+from miles.utils.event_logger.models import (
+    OptimizerStateInfo,
+    TrainEngineLocalWeightChecksumEvent,
+    TrainEngineLocalWeightChecksumState,
+)
 from miles.utils.process_identity import TrainProcessIdentity
 
 _FIXED_TS = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -16,12 +21,12 @@ def _make_event(
     param_hashes: dict[str, str] | None = None,
     buffer_hashes: dict[str, str] | None = None,
     optimizer_state_dict: dict | None = None,
-) -> LocalWeightChecksumEvent:
-    return LocalWeightChecksumEvent(
+) -> TrainEngineLocalWeightChecksumEvent:
+    return TrainEngineLocalWeightChecksumEvent(
         timestamp=_FIXED_TS,
         source=TrainProcessIdentity(component="actor", cell_index=cell_index, rank_within_cell=rank_within_cell),
         rollout_id=rollout_id,
-        state=LocalWeightChecksumState(
+        state=TrainEngineLocalWeightChecksumState(
             param_hashes=param_hashes or {},
             buffer_hashes=buffer_hashes or {},
             optimizer_hashes=(

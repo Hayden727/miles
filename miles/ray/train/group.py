@@ -13,9 +13,15 @@ from miles.ray.train.actor_factory import allocate_gpus_for_actor
 from miles.ray.train.cell import RayTrainCell
 from miles.ray.train.cell_monitor import create_trainer_cell_health_checker
 from miles.utils.async_utils import AsyncioGatherUtils
+from miles.utils.checksum_utils import flatten_inference_engine_checksums
 from miles.utils.event_analyzer import analyzer as event_analyzer
 from miles.utils.event_logger.logger import get_event_logger, is_event_logger_initialized
-from miles.utils.event_logger.models import CellReconfigureEvent, TrainGroupStepEndEvent, WitnessAllocateIdEvent
+from miles.utils.event_logger.models import (
+    CellReconfigureEvent,
+    InferenceEngineWeightChecksumEvent,
+    TrainGroupStepEndEvent,
+    WitnessAllocateIdEvent,
+)
 from miles.utils.health_checker import NoopHealthChecker, SimpleHealthCheckerConfig
 from miles.utils.indep_dp import IndepDPInfo
 from miles.utils.megatron_args_utils import compute_megatron_world_size_except_dp
@@ -223,7 +229,7 @@ class RayTrainGroup:
         # Catch with vanilla retry: cells w/ exceptions are auto marked errored, thus retry will find the next one
         await retry(lambda _: self._execute_first_alive("save_model", rollout_id, force_sync=force_sync))
 
-    async def update_weights(self):
+    async def update_weights(self, rollout_id: int | None = None):
         """Broadcast weights to rollout engines."""
         # TODO: allow using all cells to update weights (instead of first alive cell)
         # Fetch the updatable engines + lock once (like V1 RayActorGroup) so all
@@ -232,6 +238,21 @@ class RayTrainGroup:
         await self._rollout_manager.health_monitoring_pause.remote()
         # Catch with vanilla retry: cells w/ exceptions are auto marked errored, thus retry will find the next one
         await retry(lambda _: self._execute_first_alive("update_weights", info=info))
+
+        await self._maybe_log_inference_engine_weight_checksums(rollout_id=rollout_id)
+
+    async def _maybe_log_inference_engine_weight_checksums(self, *, rollout_id: int | None) -> None:
+        if not is_event_logger_initialized():
+            return
+        if self.args.debug_train_only or self.args.debug_rollout_only:
+            return
+
+        check_weights_result = await self._rollout_manager.check_weights.remote("checksum")
+        engine_checksums = flatten_inference_engine_checksums(check_weights_result)
+        get_event_logger().log(
+            InferenceEngineWeightChecksumEvent,
+            dict(rollout_id=rollout_id, engine_checksums=engine_checksums),
+        )
 
     async def onload(self):
         # Catch *without* retry: cells w/ exceptions are auto marked errored, and will not be used

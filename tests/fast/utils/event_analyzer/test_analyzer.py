@@ -7,8 +7,12 @@ import pytest
 
 from miles.utils.event_analyzer.analyzer import run_analysis, run_analysis_from_args
 from miles.utils.event_logger.logger import EventLogger
-from miles.utils.event_logger.models import LocalWeightChecksumEvent, LocalWeightChecksumState
-from miles.utils.process_identity import TrainProcessIdentity
+from miles.utils.event_logger.models import (
+    InferenceEngineWeightChecksumEvent,
+    TrainEngineLocalWeightChecksumEvent,
+    TrainEngineLocalWeightChecksumState,
+)
+from miles.utils.process_identity import MainProcessIdentity, TrainProcessIdentity
 
 
 def _log_checksum_event(
@@ -18,10 +22,10 @@ def _log_checksum_event(
     param_hashes: dict[str, str] | None = None,
 ) -> None:
     event_logger.log(
-        LocalWeightChecksumEvent,
+        TrainEngineLocalWeightChecksumEvent,
         dict(
             rollout_id=rollout_id,
-            state=LocalWeightChecksumState(
+            state=TrainEngineLocalWeightChecksumState(
                 param_hashes=param_hashes or {},
                 buffer_hashes={},
                 optimizer_hashes=[],
@@ -50,6 +54,41 @@ class TestRunAnalysis:
 
         issues = run_analysis(event_dir=tmp_path)
         assert len(issues) == 1
+
+
+def _log_inference_engine_checksum_event(
+    event_logger: EventLogger,
+    *,
+    rollout_id: int,
+    engine_checksums: list[dict[str, str]],
+) -> None:
+    event_logger.log(
+        InferenceEngineWeightChecksumEvent,
+        dict(rollout_id=rollout_id, engine_checksums=engine_checksums),
+    )
+
+
+class TestInferenceEngineChecksumRuleWiredIn:
+    def test_engine_inconsistency_reported(self, tmp_path: Path) -> None:
+        """run_analysis surfaces engine-to-engine checksum mismatches via the registered rule."""
+        event_logger = EventLogger(log_dir=tmp_path, file_name="e.jsonl", source=MainProcessIdentity())
+        _log_inference_engine_checksum_event(
+            event_logger, rollout_id=0, engine_checksums=[{"rank0/w": "aaa"}, {"rank0/w": "zzz"}]
+        )
+        event_logger.close()
+
+        issues = run_analysis(event_dir=tmp_path)
+        assert len(issues) == 1
+
+    def test_consistent_engines_no_issue(self, tmp_path: Path) -> None:
+        """Identical engine checksums produce no issue."""
+        event_logger = EventLogger(log_dir=tmp_path, file_name="e.jsonl", source=MainProcessIdentity())
+        _log_inference_engine_checksum_event(
+            event_logger, rollout_id=0, engine_checksums=[{"rank0/w": "aaa"}, {"rank0/w": "aaa"}]
+        )
+        event_logger.close()
+
+        assert run_analysis(event_dir=tmp_path) == []
 
 
 class TestRunAnalysisFromArgs:

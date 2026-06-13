@@ -25,16 +25,16 @@ class OptimizerStateInfo(FrozenStrictBaseModel):
     state_dict: dict[str, Any]
 
 
-class LocalWeightChecksumState(FrozenStrictBaseModel):
+class TrainEngineLocalWeightChecksumState(FrozenStrictBaseModel):
     param_hashes: dict[str, str]
     buffer_hashes: dict[str, str]
     # May be skipped in non-debug mode if too expensive
     optimizer_hashes: list[OptimizerStateInfo]
 
 
-class LocalWeightChecksumEvent(_ActorTrainEventBase):
-    type: Literal["local_weight_checksum"] = "local_weight_checksum"
-    state: LocalWeightChecksumState
+class TrainEngineLocalWeightChecksumEvent(_ActorTrainEventBase):
+    type: Literal["train_engine_local_weight_checksum"] = "train_engine_local_weight_checksum"
+    state: TrainEngineLocalWeightChecksumState
 
 
 class WitnessSnapshotParamEvent(_ActorTrainEventBase):
@@ -70,6 +70,14 @@ class CellReconfigureEvent(EventBase):
     alive_cell_indices_after: list[int]
 
 
+class InferenceEngineWeightChecksumEvent(EventBase):
+    type: Literal["inference_engine_weight_checksum"] = "inference_engine_weight_checksum"
+    # None for the initial out-of-loop weight sync (not tied to a rollout).
+    rollout_id: int | None
+    # One {tensor -> hash} dict per rollout engine; a TP>1 engine's ranks merge with a rank{r}/ prefix.
+    engine_checksums: list[dict[str, str]]
+
+
 class TrainAdvantageComputationEvent(_ActorTrainEventBase):
     type: Literal["train_advantage_computation"] = "train_advantage_computation"
     advantages: list[list[float]]
@@ -84,11 +92,12 @@ class MetricEvent(EventBase):
 
 
 Event = Annotated[
-    LocalWeightChecksumEvent
+    TrainEngineLocalWeightChecksumEvent
     | WitnessSnapshotParamEvent
     | WitnessAllocateIdEvent
     | TrainGroupStepEndEvent
     | CellReconfigureEvent
+    | InferenceEngineWeightChecksumEvent
     | TrainAdvantageComputationEvent
     | MetricEvent,
     Discriminator("type"),
