@@ -12,7 +12,7 @@ labels=["ft"])`. The CUDA CI runner executes each entry as bare `python3 <file>`
 |------|------|-----------------|
 | `scenario_no_failure` | Comparison | indep_dp matches normal DP when no faults |
 | `scenario_with_failure` | Comparison, multi-phase | indep_dp matches normal DP after fault + ckpt resume |
-| `scenario_deterministic` | Comparison, multi-phase | healing state transfer is bitwise-correct (stop+start) |
+| `scenario_deterministic` | Comparison, multi-phase | healing state transfer is bitwise-correct (stop+start), on cold start and on resume from a post-healing ckpt |
 | `scenario_ft_random` | Non-comparison | system survives random crashes without hanging |
 | `scenario_realistic_gsm8k` | Non-comparison | model still reaches gsm8k accuracy under random crashes |
 
@@ -254,20 +254,35 @@ and far above what any gross weight corruption can produce.
 
 ### `scenario_deterministic`
 
-Multi-phase comparison test. Verifies healing state transfer is **bitwise** correct.
+Multi-phase comparison test. Verifies healing state transfer is **bitwise** correct, in
+both start regimes: cold start (phase_a) and resume from a post-healing checkpoint
+(phase_b).
 
 ```
 Type: comparison, multi-phase (phase_a + phase_b)
-Phase A steps: 1, Phase B steps: 3 (rollouts 1..3; --num-rollout 4 resumed from the
-rollout-0 checkpoint — rollout 3 must exist, otherwise healing never executes)
-Comparison: dump rel <= 0 (bitwise), metrics rtol=0 / atol=0 (exact)
+One shared builder parameterized by the phase's start rollout id P emits both phases: 3
+rollouts, stop/start healing at the same relative offset, ckpt saved only at the phase's
+last rollout (--save-interval 3 = NUM_ROLLOUTS_PER_PHASE). Only the start regime differs:
+  phase_a: cold start (no --load, start_rollout_id=0) — rollouts 0..2 (P=0)
+  phase_b: resumes from phase_a's last (rollout-2, post-healing) ckpt
+           (start_rollout_id = loaded + 1 = 3) — rollouts 3..5 (P=3)
+--num-rollout is 6 (exclusive end rollout id, not a per-run count); each phase stops after
+3 rollouts via --debug-exit-after-rollout 3, which counts rollouts within the run and fires
+after that rollout's ckpt save.
+Comparison: BOTH phases' dumps rel <= 0 (bitwise), metrics rtol=0 / atol=0 (exact)
 
-Phase A: same as with_failure (1 step + save ckpt).
+Per-phase baseline timeline: rollouts P..P+2 all normal (normal DP, no stop/start, no
+healing) — the no-fault reference the target must reproduce bit-for-bit.
 
-Phase B — target timeline:
-  1. Rollout 1, 2: all N cells normal (2 good steps, accumulate meaningful state)
-  2. After rollout 2: stop_cell_at_end(last) + start_cell_at_end(last) — trigger healing
-  3. Rollout 3: healing at start (recv_ckpt from cell_0), then normal execution
+Per-phase target timeline:
+  1. Rollout P, P+1: all N cells normal
+  2. After rollout P+1: stop_cell_at_end(last) + start_cell_at_end(last) — trigger healing
+  3. Rollout P+2: healing at start (recv_ckpt from cell_0), then normal execution
+     (P+2 must exist, otherwise healing never executes)
+
+phase_a exercises healing on a cold-started run (no --load sets
+no_load_optim/no_load_rng/finetune); phase_b exercises it after resume and — reproducing
+the baseline bit-for-bit — also proves phase_a's post-healing ckpt round-trips bitwise.
 
 Both baseline and target use --deterministic-mode + env vars (NCCL_ALGO=Ring,
 NVTE_ALLOW_NONDETERMINISTIC_ALGO=0, CUBLAS_WORKSPACE_CONFIG=:4096:8) for kernel
@@ -283,20 +298,22 @@ cross_replica_weight_checksum rule checks cell-to-cell bitwise equality after he
 
 Engine weight checksum (real_rollout mode only): both sides pass
 --check-engine-weight-checksum, so after every update_weights each rollout engine's
-weights are hashed into an EngineWeightChecksumEvent. _compare then asserts the
-baseline and target pushed bitwise-identical weights for every (rollout, engine) pair,
-which is what consumes the post-heal update_weights output (closing the gap noted under
+weights are hashed into an EngineWeightChecksumEvent. _compare then asserts per phase that
+the baseline and target pushed bitwise-identical weights for every (rollout, engine) pair,
+covering both phases (phase_b's engines are loaded from the phase_a ckpt), which is what
+consumes the post-heal update_weights output (closing the gap noted under
 scenario_with_failure). Independently, the event_analyzer
 engine_weight_checksum_consistency rule checks that all engines of one rollout received
 the same weights — this is the production-facing check (function A), enabled by
 --check-engine-weight-checksum on any run.
 
-Healing witness: the target phase_b event dir must contain exactly one
-CellReconfigureEvent — a healing at rollout 3 (healed = last cell, ckpt src = cell 0,
-alive back to N; the stop+start pair is absorbed by a single _refresh_cells, so there is
-no standalone shrink). Baseline and phase_a event dirs must contain zero reconfigure
-events. This is the regression gate for the off-by-one class of bugs where healing
-silently never runs and the comparison passes on two fault-free runs.
+Healing witness: each target phase heals once, so each target event dir must contain
+exactly one CellReconfigureEvent — a healing at rollout P+2 (healed = last cell, ckpt src =
+cell 0, alive back to N; the stop+start pair is absorbed by a single _refresh_cells, so
+there is no standalone shrink). Global ids: phase_a heal 2; phase_b heal 5. Both baseline
+event dirs must contain zero reconfigure events. This is the regression gate for the
+off-by-one class of bugs where healing silently never runs and the comparison passes on
+fault-free runs.
 ```
 
 ### `scenario_ft_random`
