@@ -19,7 +19,7 @@ from megatron.core.optimizer.optimizer import MegatronOptimizer
 from miles.backends.megatron_utils.ci_utils import _hash_tensor_bytes
 
 if TYPE_CHECKING:
-    from miles.utils.event_logger.models import LocalWeightChecksumState, OptimizerStateInfo
+    from miles.utils.event_logger.models import TrainEngineLocalWeightChecksumState, OptimizerStateInfo
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def dump_local_weight_checksums(
     # Local imports to break circular dependency:
     # logger.py → models.py → model.py → local_weight_checksum.py → logger.py
     from miles.utils.event_logger.logger import get_event_logger, is_event_logger_initialized
-    from miles.utils.event_logger.models import LocalWeightChecksumEvent
+    from miles.utils.event_logger.models import TrainEngineLocalWeightChecksumEvent
 
     assert is_event_logger_initialized(), "save_local_weight_checksum is enabled but EventLogger is not initialized"
 
@@ -55,7 +55,7 @@ def dump_local_weight_checksums(
         optimizer=optimizer,
     )
     event_logger.log(
-        LocalWeightChecksumEvent,
+        TrainEngineLocalWeightChecksumEvent,
         dict(state=state),
         print_log=False,
     )
@@ -64,8 +64,8 @@ def dump_local_weight_checksums(
 def _compute_weight_checksum_state(
     model: Sequence[DDP],
     optimizer: MegatronOptimizer,
-) -> "LocalWeightChecksumState":
-    from miles.utils.event_logger.models import LocalWeightChecksumState
+) -> "TrainEngineLocalWeightChecksumState":
+    from miles.utils.event_logger.models import TrainEngineLocalWeightChecksumState
 
     param_hashes = _hash_named_tensors(model, accessor="named_parameters")
     assert param_hashes, "No parameters found in model"
@@ -74,7 +74,7 @@ def _compute_weight_checksum_state(
     optimizer_hashes = _collect_optimizer_hashes(model=model, optimizer=optimizer)
     assert optimizer_hashes, "No sub-optimizers found"
 
-    return LocalWeightChecksumState(
+    return TrainEngineLocalWeightChecksumState(
         param_hashes=param_hashes,
         buffer_hashes=buffer_hashes,
         optimizer_hashes=optimizer_hashes,

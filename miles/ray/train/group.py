@@ -13,12 +13,12 @@ from miles.ray.train.actor_factory import allocate_gpus_for_actor
 from miles.ray.train.cell import RayTrainCell
 from miles.ray.train.cell_monitor import create_trainer_cell_health_checker
 from miles.utils.async_utils import AsyncioGatherUtils
-from miles.utils.engine_weight_checksum import flatten_engine_checksums
+from miles.utils.checksum_utils import flatten_engine_checksums
 from miles.utils.event_analyzer import analyzer as event_analyzer
 from miles.utils.event_logger.logger import get_event_logger, is_event_logger_initialized
 from miles.utils.event_logger.models import (
     CellReconfigureEvent,
-    EngineWeightChecksumEvent,
+    InferenceEngineWeightChecksumEvent,
     TrainGroupStepEndEvent,
     WitnessAllocateIdEvent,
 )
@@ -251,7 +251,7 @@ class RayTrainGroup:
         check_weights_result = await self._rollout_manager.check_weights.remote("checksum")
         engine_checksums = flatten_engine_checksums(check_weights_result)
         get_event_logger().log(
-            EngineWeightChecksumEvent,
+            InferenceEngineWeightChecksumEvent,
             dict(rollout_id=rollout_id, engine_checksums=engine_checksums),
         )
 

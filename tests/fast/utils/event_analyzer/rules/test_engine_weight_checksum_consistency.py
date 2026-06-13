@@ -3,14 +3,14 @@
 from datetime import datetime, timezone
 
 from miles.utils.event_analyzer.rules.engine_weight_checksum_consistency import check
-from miles.utils.event_logger.models import EngineWeightChecksumEvent
+from miles.utils.event_logger.models import InferenceEngineWeightChecksumEvent
 from miles.utils.process_identity import MainProcessIdentity
 
 _FIXED_TS = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _make_event(*, rollout_id: int, engine_checksums: list[dict[str, str]]) -> EngineWeightChecksumEvent:
-    return EngineWeightChecksumEvent(
+def _make_event(*, rollout_id: int, engine_checksums: list[dict[str, str]]) -> InferenceEngineWeightChecksumEvent:
+    return InferenceEngineWeightChecksumEvent(
         timestamp=_FIXED_TS,
         source=MainProcessIdentity(),
         rollout_id=rollout_id,

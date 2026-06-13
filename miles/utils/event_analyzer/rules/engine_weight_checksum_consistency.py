@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 
 from miles.utils.event_analyzer.rules.checksum_compare import ChecksumMismatchIssue, compare_flat_dicts
-from miles.utils.event_logger.models import EngineWeightChecksumEvent, Event
+from miles.utils.event_logger.models import InferenceEngineWeightChecksumEvent, Event
 
 __all__ = ["check"]
 
@@ -10,12 +10,12 @@ def check(events: list[Event]) -> list[ChecksumMismatchIssue]:
     """Check: all engines of one rollout must hold exactly the same weights."""
     issues: list[ChecksumMismatchIssue] = []
     for event in events:
-        if isinstance(event, EngineWeightChecksumEvent):
+        if isinstance(event, InferenceEngineWeightChecksumEvent):
             issues += list(_check_one_rollout(event))
     return issues
 
 
-def _check_one_rollout(event: EngineWeightChecksumEvent) -> Iterable[ChecksumMismatchIssue]:
+def _check_one_rollout(event: InferenceEngineWeightChecksumEvent) -> Iterable[ChecksumMismatchIssue]:
     engines = event.engine_checksums
     if len(engines) < 2:
         return

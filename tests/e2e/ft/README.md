@@ -293,7 +293,7 @@ Bitwise verification: --use-fault-tolerance --ft-components train auto-enables
 cross_replica_weight_checksum rule checks cell-to-cell bitwise equality after healing.
 
 Engine weight checksum (real_rollout mode only): each update_weights logs one
-EngineWeightChecksumEvent per rollout (all engines). _compare asserts per phase that baseline
+InferenceEngineWeightChecksumEvent per rollout (all engines). _compare asserts per phase that baseline
 and target pushed bitwise-identical weights for every (rollout, engine) pair; the
 event_analyzer engine_weight_checksum_consistency rule independently checks that all engines
 of a rollout agree (the production-facing function A).

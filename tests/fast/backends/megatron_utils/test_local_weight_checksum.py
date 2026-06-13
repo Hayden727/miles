@@ -13,7 +13,7 @@ from miles.backends.megatron_utils.local_weight_checksum import (
     dump_local_weight_checksums,
 )
 from miles.utils.event_logger.logger import EventLogger, read_events, set_event_logger
-from miles.utils.event_logger.models import LocalWeightChecksumEvent
+from miles.utils.event_logger.models import TrainEngineLocalWeightChecksumEvent
 from miles.utils.process_identity import TrainProcessIdentity
 
 
@@ -252,7 +252,7 @@ class TestDumpLocalWeightChecksums:
             event_logger.close()
 
             events = read_events(tmp_path)
-            checksum_events = [e for e in events if isinstance(e, LocalWeightChecksumEvent)]
+            checksum_events = [e for e in events if isinstance(e, TrainEngineLocalWeightChecksumEvent)]
             assert len(checksum_events) == 1
             assert checksum_events[0].source.cell_index == 2
             assert checksum_events[0].source.rank_within_cell == 7

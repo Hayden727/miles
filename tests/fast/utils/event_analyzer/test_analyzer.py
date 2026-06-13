@@ -8,9 +8,9 @@ import pytest
 from miles.utils.event_analyzer.analyzer import run_analysis, run_analysis_from_args
 from miles.utils.event_logger.logger import EventLogger
 from miles.utils.event_logger.models import (
-    EngineWeightChecksumEvent,
-    LocalWeightChecksumEvent,
-    LocalWeightChecksumState,
+    InferenceEngineWeightChecksumEvent,
+    TrainEngineLocalWeightChecksumEvent,
+    TrainEngineLocalWeightChecksumState,
 )
 from miles.utils.process_identity import MainProcessIdentity, TrainProcessIdentity
 
@@ -22,10 +22,10 @@ def _log_checksum_event(
     param_hashes: dict[str, str] | None = None,
 ) -> None:
     event_logger.log(
-        LocalWeightChecksumEvent,
+        TrainEngineLocalWeightChecksumEvent,
         dict(
             rollout_id=rollout_id,
-            state=LocalWeightChecksumState(
+            state=TrainEngineLocalWeightChecksumState(
                 param_hashes=param_hashes or {},
                 buffer_hashes={},
                 optimizer_hashes=[],
@@ -63,7 +63,7 @@ def _log_engine_checksum_event(
     engine_checksums: list[dict[str, str]],
 ) -> None:
     event_logger.log(
-        EngineWeightChecksumEvent,
+        InferenceEngineWeightChecksumEvent,
         dict(rollout_id=rollout_id, engine_checksums=engine_checksums),
     )
 

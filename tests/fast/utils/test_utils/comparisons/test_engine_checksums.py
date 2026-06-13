@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from miles.utils.event_logger.logger import EventLogger
-from miles.utils.event_logger.models import EngineWeightChecksumEvent
+from miles.utils.event_logger.models import InferenceEngineWeightChecksumEvent
 from miles.utils.process_identity import MainProcessIdentity
 from miles.utils.test_utils.comparisons.engine_checksums import compare_engine_checksums
 
@@ -15,7 +15,7 @@ def _write_engine_events(side_dir: Path, partials: list[dict[str, Any]]) -> None
     events_dir = side_dir / "events"
     event_logger = EventLogger(log_dir=events_dir, source=MainProcessIdentity())
     for partial in partials:
-        event_logger.log(EngineWeightChecksumEvent, partial, print_log=False)
+        event_logger.log(InferenceEngineWeightChecksumEvent, partial, print_log=False)
     event_logger.close()
 
 
@@ -89,5 +89,5 @@ class TestCompareEngineChecksums:
         _write_engine_events(tmp_path / "baseline", [])
         _write_engine_events(tmp_path / "target", [_partial(rollout_id=1, engine_checksums=[{"rank0/w": "aaa"}])])
 
-        with pytest.raises(AssertionError, match="No EngineWeightChecksumEvents found in baseline"):
+        with pytest.raises(AssertionError, match="No InferenceEngineWeightChecksumEvents found in baseline"):
             compare_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
