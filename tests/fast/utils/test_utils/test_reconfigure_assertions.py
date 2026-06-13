@@ -7,7 +7,7 @@ from miles.utils.event_logger.logger import EventLogger
 from miles.utils.event_logger.models import CellReconfigureEvent, TrainGroupStepEndEvent
 from miles.utils.process_identity import MainProcessIdentity
 from miles.utils.test_utils.reconfigure_assertions import (
-    ExpectedReconfigure,
+    ReconfigureInfo,
     assert_reconfigure_events,
     assert_soak_reconfigure_events,
     load_reconfigure_events,
@@ -28,10 +28,10 @@ _HEALING_PARTIAL: dict[str, Any] = dict(
     alive_cell_indices_after=[0, 1],
 )
 
-_SHRINK_EXPECTED = ExpectedReconfigure(
+_SHRINK_EXPECTED = ReconfigureInfo(
     rollout_id=2, src_cell_index=None, healed_cell_indices=[], alive_cell_indices_after=[0]
 )
-_HEALING_EXPECTED = ExpectedReconfigure(
+_HEALING_EXPECTED = ReconfigureInfo(
     rollout_id=3, src_cell_index=0, healed_cell_indices=[1], alive_cell_indices_after=[0, 1]
 )
 
@@ -106,11 +106,12 @@ class TestAssertSoakReconfigureEvents:
             tmp_path, num_successful_injections=1, num_cells=2, final_rollout_id=self._FINAL_ROLLOUT_ID
         )
 
-    def test_passes_with_no_injections_and_no_events(self, tmp_path: Path) -> None:
-        """Zero injections and zero events is a legitimate (quiet) soak outcome."""
-        assert_soak_reconfigure_events(
-            tmp_path, num_successful_injections=0, num_cells=2, final_rollout_id=self._FINAL_ROLLOUT_ID
-        )
+    def test_fails_when_no_injections(self, tmp_path: Path) -> None:
+        """Zero successful injections means the soak exercised no fault tolerance, so the witness fails."""
+        with pytest.raises(AssertionError, match="proved nothing"):
+            assert_soak_reconfigure_events(
+                tmp_path, num_successful_injections=0, num_cells=2, final_rollout_id=self._FINAL_ROLLOUT_ID
+            )
 
     def test_passes_with_single_trailing_shrink_at_final_rollout(self, tmp_path: Path) -> None:
         """A fault inside the final rollout's train() leaves one trailing shrink, which is tolerated."""

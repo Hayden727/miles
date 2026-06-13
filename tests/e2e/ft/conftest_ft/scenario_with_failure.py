@@ -14,7 +14,7 @@ from miles.utils.test_utils.comparisons import (
     compare_dumps,
     compare_metrics,
 )
-from miles.utils.test_utils.reconfigure_assertions import ExpectedReconfigure, assert_reconfigure_events
+from miles.utils.test_utils.reconfigure_assertions import ReconfigureInfo, assert_reconfigure_events
 
 NUM_PHASE_A_STEPS: int = 1
 NUM_PHASE_B_STEPS: int = 4
@@ -66,17 +66,17 @@ _WITH_FAILURE_ACTIONS: list[dict] = [
 ]
 
 
-def _expected_reconfigures(*, is_target: bool, phase: str, num_cells: int) -> list[ExpectedReconfigure]:
+def _expected_reconfigures(*, is_target: bool, phase: str, num_cells: int) -> list[ReconfigureInfo]:
     if not (is_target and phase == "phase_b"):
         return []
     return [
-        ExpectedReconfigure(
+        ReconfigureInfo(
             rollout_id=NUM_PHASE_A_STEPS + 1,
             src_cell_index=None,
             healed_cell_indices=[],
             alive_cell_indices_after=list(range(num_cells - 1)),
         ),
-        ExpectedReconfigure(
+        ReconfigureInfo(
             rollout_id=NUM_PHASE_A_STEPS + 2,
             src_cell_index=0,
             healed_cell_indices=[num_cells - 1],
