@@ -23,12 +23,12 @@ def compare_inference_engine_checksums(baseline_dir: str, target_dir: str) -> No
     target_by_rollout = _checksums_by_rollout_id(target)
     assert baseline_by_rollout.keys() == target_by_rollout.keys(), (
         f"Engine checksum rollout_id sets differ: "
-        f"baseline={sorted(baseline_by_rollout, key=_rollout_sort_key)} "
-        f"vs target={sorted(target_by_rollout, key=_rollout_sort_key)}"
+        f"baseline={sorted(baseline_by_rollout)} "
+        f"vs target={sorted(target_by_rollout)}"
     )
 
     mismatches: list[ChecksumMismatchIssue] = []
-    for rollout_id in sorted(baseline_by_rollout, key=_rollout_sort_key):
+    for rollout_id in sorted(baseline_by_rollout):
         mismatches += list(
             compare_flat_dicts(
                 a=baseline_by_rollout[rollout_id],
@@ -43,14 +43,14 @@ def compare_inference_engine_checksums(baseline_dir: str, target_dir: str) -> No
     print(f"Engine weight checksum comparison passed: {len(baseline_by_rollout)} rollout(s) compared")
 
 
-def _rollout_sort_key(rollout_id: int | None) -> tuple[bool, int]:
-    # None (the initial out-of-loop sync) sorts last; ints in natural order.
-    return (rollout_id is None, rollout_id if rollout_id is not None else 0)
-
-
-def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int | None, dict[str, str]]:
-    by_rollout: dict[int | None, dict[str, str]] = {}
+def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int, dict[str, str]]:
+    # Skip the initial out-of-loop sync (rollout_id=None): a multi-phase resume restores the
+    # prior phase's event dir, so it recurs once per phase and is not a unique key. The
+    # per-rollout checksums fully cover engine-weight equality.
+    by_rollout: dict[int, dict[str, str]] = {}
     for event in events:
+        if event.rollout_id is None:
+            continue
         assert (
             event.rollout_id not in by_rollout
         ), f"Duplicate InferenceEngineWeightChecksumEvent for rollout {event.rollout_id}"

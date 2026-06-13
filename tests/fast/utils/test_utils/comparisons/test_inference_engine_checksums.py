@@ -44,28 +44,47 @@ class TestCompareInferenceEngineChecksums:
 
         compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
 
-    def test_none_rollout_id_aligned_across_sides(self, tmp_path: Path) -> None:
-        """The initial out-of-loop sync (rollout_id=None) is aligned by its None key alongside int rollouts."""
-        partials = [
-            _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init"}]),
-            _partial(rollout_id=1, engine_checksums=[{"rank0/w": "aaa"}]),
-        ]
-        _write_inference_engine_events(tmp_path / "baseline", partials)
-        _write_inference_engine_events(tmp_path / "target", partials)
+    def test_none_rollout_id_skipped(self, tmp_path: Path) -> None:
+        """The initial out-of-loop sync (rollout_id=None) is not compared: it differs here yet the
+        per-rollout checksums match, so the comparison still passes."""
+        _write_inference_engine_events(
+            tmp_path / "baseline",
+            [
+                _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init_baseline"}]),
+                _partial(rollout_id=1, engine_checksums=[{"rank0/w": "aaa"}]),
+            ],
+        )
+        _write_inference_engine_events(
+            tmp_path / "target",
+            [
+                _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init_target"}]),
+                _partial(rollout_id=1, engine_checksums=[{"rank0/w": "aaa"}]),
+            ],
+        )
 
         compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
 
-    def test_none_rollout_id_mismatch_fails(self, tmp_path: Path) -> None:
-        """A differing initial-sync (rollout_id=None) representative fails closed like any other rollout."""
+    def test_recurring_none_across_phases_skipped(self, tmp_path: Path) -> None:
+        """A multi-phase resume yields several None events per side; all are skipped, so a side with
+        more None events than the other still passes when the per-rollout checksums match."""
         _write_inference_engine_events(
-            tmp_path / "baseline", [_partial(rollout_id=None, engine_checksums=[{"rank0/w": "init"}])]
+            tmp_path / "baseline",
+            [
+                _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init_a"}]),
+                _partial(rollout_id=2, engine_checksums=[{"rank0/w": "aaa"}]),
+                _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init_b"}]),
+                _partial(rollout_id=5, engine_checksums=[{"rank0/w": "bbb"}]),
+            ],
         )
         _write_inference_engine_events(
-            tmp_path / "target", [_partial(rollout_id=None, engine_checksums=[{"rank0/w": "zzz"}])]
+            tmp_path / "target",
+            [
+                _partial(rollout_id=2, engine_checksums=[{"rank0/w": "aaa"}]),
+                _partial(rollout_id=5, engine_checksums=[{"rank0/w": "bbb"}]),
+            ],
         )
 
-        with pytest.raises(AssertionError, match=r"key rank0/w"):
-            compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
+        compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
 
     def test_baseline_engines_disagree_fails(self, tmp_path: Path) -> None:
         """If baseline's own engines disagree, the comparison fails (caught by the consistency rule)."""
