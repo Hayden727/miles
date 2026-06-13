@@ -44,9 +44,6 @@ def compare_inference_engine_checksums(baseline_dir: str, target_dir: str) -> No
 
 
 def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int, dict[str, str]]:
-    # Skip the initial out-of-loop sync (rollout_id=None): a multi-phase resume restores the
-    # prior phase's event dir, so it recurs once per phase and is not a unique key. The
-    # per-rollout checksums fully cover engine-weight equality.
     by_rollout: dict[int, dict[str, str]] = {}
     for event in events:
         if event.rollout_id is None:
