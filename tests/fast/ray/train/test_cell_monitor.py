@@ -1,9 +1,10 @@
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import ray
 
-from miles.ray.train.cell_monitor import compute_cell_status
+from miles.ray.train.cell_monitor import compute_cell_status, create_trainer_cell_health_checker
+from miles.utils.health_checker import SimpleHealthCheckerConfig
 from miles.ray.train.cell_state import (
     StateAllocatedAlive,
     StateAllocatedErrored,
@@ -100,3 +101,51 @@ class TestComputeCellStatusOtherStates:
 
         assert result.phase == "Suspended"
         assert all(c.type != "Healthy" for c in result.conditions)
+
+
+def _make_cell_mock(*, is_alive: bool, execute: AsyncMock) -> MagicMock:
+    cell = MagicMock()
+    cell.is_alive = is_alive
+    cell.cell_index = 0
+    cell.execute = execute
+    return cell
+
+
+class TestTrainerCellHealthCheckLiveness:
+    """Cell health is defined as process liveness (RPC reachability), not training
+    progress: the check must succeed whenever the heartbeat RPC returns, and fail only
+    when the actor is dead/unresponsive."""
+
+    @pytest.mark.asyncio
+    async def test_rpc_returns_means_healthy_regardless_of_progress(self):
+        """A returned heartbeat (even a stale one) proves liveness, so _check passes."""
+        execute = AsyncMock(return_value=[MagicMock(last_active_timestamp=0.0, bump_count=1)])
+        cell = _make_cell_mock(is_alive=True, execute=execute)
+
+        checker = create_trainer_cell_health_checker(cell=cell, config=SimpleHealthCheckerConfig())
+
+        await checker._check_fn()
+        execute.assert_awaited_once_with("get_heartbeat_status", mark_errored_on_failure=False)
+
+    @pytest.mark.asyncio
+    async def test_rpc_error_propagates_as_unhealthy(self):
+        """A dead actor makes the heartbeat RPC raise; _check propagates it so the
+        checker reports unhealthy."""
+        execute = AsyncMock(side_effect=ray.exceptions.RayActorError())
+        cell = _make_cell_mock(is_alive=True, execute=execute)
+
+        checker = create_trainer_cell_health_checker(cell=cell, config=SimpleHealthCheckerConfig())
+
+        with pytest.raises(ray.exceptions.RayActorError):
+            await checker._check_fn()
+
+    @pytest.mark.asyncio
+    async def test_not_alive_cell_skips_rpc(self):
+        """A not-yet-alive cell is not probed and is not reported unhealthy."""
+        execute = AsyncMock()
+        cell = _make_cell_mock(is_alive=False, execute=execute)
+
+        checker = create_trainer_cell_health_checker(cell=cell, config=SimpleHealthCheckerConfig())
+
+        await checker._check_fn()
+        execute.assert_not_awaited()

@@ -105,7 +105,6 @@ class RayTrainGroup:
                 cell.health_checker = create_trainer_cell_health_checker(
                     cell=cell,
                     config=health_checker_config,
-                    max_heartbeat_age=args.trainer_heartbeat_checker_max_heartbeat_age,
                 )
 
             return cell

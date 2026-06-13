@@ -1,4 +1,3 @@
-import time
 from typing import TYPE_CHECKING
 
 from miles.ray.train.cell_state import (
@@ -20,22 +19,16 @@ def create_trainer_cell_health_checker(
     *,
     cell: "RayTrainCell",
     config: SimpleHealthCheckerConfig,
-    max_heartbeat_age: float,
 ) -> SimpleHealthChecker:
     async def _check() -> None:
+        # Cell health is liveness, not training progress: the heartbeat RPC runs on
+        # a dedicated concurrency group and returns even while the training thread is
+        # blocked in a (legitimately waiting) cross-cell collective. A returned result
+        # proves the process is alive; an RayActorError or RPC timeout proves it is not.
         if not cell.is_alive:
             return
 
-        now = time.time()
-        results = await cell.execute("get_heartbeat_status", mark_errored_on_failure=False)
-
-        for status in results:
-            delta = now - status.last_active_timestamp
-            if delta > max_heartbeat_age:
-                raise RuntimeError(
-                    f"Heartbeat stale: last_active={status.last_active_timestamp:.1f}, "
-                    f"now={now:.1f}, delta={delta:.1f}s, bump_count={status.bump_count}"
-                )
+        await cell.execute("get_heartbeat_status", mark_errored_on_failure=False)
 
     return SimpleHealthChecker(
         name=f"trainer-cell-{cell.cell_index}",
