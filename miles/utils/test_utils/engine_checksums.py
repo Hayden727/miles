@@ -29,9 +29,7 @@ class EngineChecksumDumper:
         self._rollout_manager = rollout_manager
 
     @staticmethod
-    def from_args(
-        args: argparse.Namespace, *, rollout_manager: ActorHandle | None
-    ) -> "EngineChecksumDumper | None":
+    def from_args(args: argparse.Namespace, *, rollout_manager: ActorHandle | None) -> "EngineChecksumDumper | None":
         if args.ci_dump_engine_weight_checksums is None or rollout_manager is None:
             return None
         return EngineChecksumDumper(
