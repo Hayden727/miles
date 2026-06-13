@@ -43,7 +43,9 @@ def compare_engine_checksums(baseline_dir: str, target_dir: str) -> None:
 def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int, dict[str, str]]:
     by_rollout: dict[int, dict[str, str]] = {}
     for event in events:
-        assert event.rollout_id not in by_rollout, f"Duplicate InferenceEngineWeightChecksumEvent for rollout {event.rollout_id}"
+        assert (
+            event.rollout_id not in by_rollout
+        ), f"Duplicate InferenceEngineWeightChecksumEvent for rollout {event.rollout_id}"
         assert event.engine_checksums, f"No engine checksums for rollout {event.rollout_id}"
         by_rollout[event.rollout_id] = event.engine_checksums[0]
     return by_rollout

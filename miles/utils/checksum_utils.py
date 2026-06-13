@@ -14,12 +14,7 @@ def flatten_engine_checksums(check_weights_result: Any) -> list[EngineChecksums]
 
 
 def _flatten_to_engine_bodies(check_weights_result: Any) -> list[Any]:
-    return [
-        engine_body
-        for server in check_weights_result
-        for server_group in server
-        for engine_body in server_group
-    ]
+    return [engine_body for server in check_weights_result for server_group in server for engine_body in server_group]
 
 
 def _merge_engine_ranks(engine_body: dict[str, Any]) -> EngineChecksums:

@@ -6,8 +6,8 @@ from pydantic import TypeAdapter, ValidationError
 from miles.backends.megatron_utils.types import TrainStepOutcome
 from miles.utils.event_logger.models import (
     CellReconfigureEvent,
-    InferenceEngineWeightChecksumEvent,
     Event,
+    InferenceEngineWeightChecksumEvent,
     TrainGroupStepEndEvent,
     WitnessAllocateIdEvent,
     WitnessSnapshotParamEvent,
