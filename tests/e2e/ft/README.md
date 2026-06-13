@@ -281,7 +281,11 @@ per-rollout syncs, including the post-healing one — each rollout engine's weig
 checksummed per tensor (sglang `weights_checker` `checksum` action) and dumped to
 `engine_checksums/{rollout_<id>,initial}/engine_<i>.json`. `_compare` then asserts
 baseline and target checksums are identical per rollout / engine / tensor, fail-closed on
-missing dirs or files (`compare_engine_checksum_dumps`). Sensitivity argument: both sides
+missing dirs or files (`compare_engine_checksum_dumps`). The comparison also pins the
+exact expectation on both trees — one `initial/` dir plus one `rollout_<i>/` dir per
+phase_b rollout, each containing exactly `mode.rollout_num_engines` engine files — so a
+symmetric loss on both sides (e.g. broken rollout_id plumbing dumping everything into
+`initial/`, or a shrunken engine set) cannot pass. Sensitivity argument: both sides
 train bitwise-identically (asserted by the dump/metric comparison above), so the weights
 pushed by every update_weights must be bitwise-identical too, and the engine-side hashes
 must match with zero tolerance. A silently broken post-heal weight sync — no-op (engine
