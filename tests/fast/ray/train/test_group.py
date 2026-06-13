@@ -1019,6 +1019,18 @@ class TestMaybeLogEngineWeightChecksums:
 
         rollout_mgr.check_weights.assert_not_called()
 
+    async def test_debug_rollout_only_skips_collection(self):
+        """Without real train engines pushing weights (debug_rollout_only), no check_weights request is issued."""
+        rollout_mgr = MagicMock()
+        rollout_mgr.check_weights = MagicMock()
+        group = _make_group(num_cells=1, rollout_manager=rollout_mgr)
+        group.args.debug_rollout_only = True
+
+        with patch("miles.ray.train.group.is_event_logger_initialized", return_value=True):
+            await group._maybe_log_inference_engine_weight_checksums(rollout_id=0)
+
+        rollout_mgr.check_weights.assert_not_called()
+
     async def test_enabled_logs_one_event_per_rollout(self):
         """With event logger on and real engines, one event holds every engine's checksums."""
         rollout_mgr = MagicMock()

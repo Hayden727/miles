@@ -19,7 +19,7 @@ def _write_engine_events(side_dir: Path, partials: list[dict[str, Any]]) -> None
     event_logger.close()
 
 
-def _partial(*, rollout_id: int, engine_checksums: list[dict[str, str]]) -> dict[str, Any]:
+def _partial(*, rollout_id: int | None, engine_checksums: list[dict[str, str]]) -> dict[str, Any]:
     return dict(rollout_id=rollout_id, engine_checksums=engine_checksums)
 
 
@@ -41,6 +41,27 @@ class TestCompareInferenceEngineChecksums:
         )
 
         compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
+
+    def test_none_rollout_id_aligned_across_sides(self, tmp_path: Path) -> None:
+        """The initial out-of-loop sync (rollout_id=None) is aligned by its None key alongside int rollouts."""
+        partials = [
+            _partial(rollout_id=None, engine_checksums=[{"rank0/w": "init"}]),
+            _partial(rollout_id=1, engine_checksums=[{"rank0/w": "aaa"}]),
+        ]
+        _write_engine_events(tmp_path / "baseline", partials)
+        _write_engine_events(tmp_path / "target", partials)
+
+        compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
+
+    def test_none_rollout_id_mismatch_fails(self, tmp_path: Path) -> None:
+        """A differing initial-sync (rollout_id=None) representative fails closed like any other rollout."""
+        _write_engine_events(
+            tmp_path / "baseline", [_partial(rollout_id=None, engine_checksums=[{"rank0/w": "init"}])]
+        )
+        _write_engine_events(tmp_path / "target", [_partial(rollout_id=None, engine_checksums=[{"rank0/w": "zzz"}])])
+
+        with pytest.raises(AssertionError, match=r"key rank0/w"):
+            compare_inference_engine_checksums(str(tmp_path / "baseline"), str(tmp_path / "target"))
 
     def test_baseline_engines_disagree_fails(self, tmp_path: Path) -> None:
         """If baseline's own engines disagree, the comparison fails (caught by the consistency rule)."""
