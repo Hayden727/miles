@@ -9,7 +9,9 @@ from miles.utils.process_identity import MainProcessIdentity
 _FIXED_TS = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _make_event(*, rollout_id: int | None, engine_checksums: list[dict[str, str]]) -> InferenceEngineWeightChecksumEvent:
+def _make_event(
+    *, rollout_id: int | None, engine_checksums: list[dict[str, str]]
+) -> InferenceEngineWeightChecksumEvent:
     return InferenceEngineWeightChecksumEvent(
         timestamp=_FIXED_TS,
         source=MainProcessIdentity(),
