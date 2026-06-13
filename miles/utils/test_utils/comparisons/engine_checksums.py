@@ -21,11 +21,12 @@ def compare_engine_checksums(baseline_dir: str, target_dir: str) -> None:
     target_by_rollout = _checksums_by_rollout_id(target)
     assert baseline_by_rollout.keys() == target_by_rollout.keys(), (
         f"Engine checksum rollout_id sets differ: "
-        f"baseline={sorted(baseline_by_rollout)} vs target={sorted(target_by_rollout)}"
+        f"baseline={sorted(baseline_by_rollout, key=_rollout_sort_key)} "
+        f"vs target={sorted(target_by_rollout, key=_rollout_sort_key)}"
     )
 
     mismatches: list[ChecksumMismatchIssue] = []
-    for rollout_id in sorted(baseline_by_rollout):
+    for rollout_id in sorted(baseline_by_rollout, key=_rollout_sort_key):
         mismatches += list(
             compare_flat_dicts(
                 a=baseline_by_rollout[rollout_id],
@@ -40,8 +41,13 @@ def compare_engine_checksums(baseline_dir: str, target_dir: str) -> None:
     print(f"Engine weight checksum comparison passed: {len(baseline_by_rollout)} rollout(s) compared")
 
 
-def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int, dict[str, str]]:
-    by_rollout: dict[int, dict[str, str]] = {}
+def _rollout_sort_key(rollout_id: int | None) -> tuple[bool, int]:
+    # None (the initial out-of-loop sync) sorts last; ints in natural order.
+    return (rollout_id is None, rollout_id if rollout_id is not None else 0)
+
+
+def _checksums_by_rollout_id(events: list[InferenceEngineWeightChecksumEvent]) -> dict[int | None, dict[str, str]]:
+    by_rollout: dict[int | None, dict[str, str]] = {}
     for event in events:
         assert (
             event.rollout_id not in by_rollout

@@ -989,13 +989,23 @@ class TestMaybeLogEngineWeightChecksums:
 
         rollout_mgr.check_weights.assert_not_called()
 
-    async def test_none_rollout_id_asserts_when_reached(self):
-        """_maybe_log treats a None rollout_id as a precondition violation once events are on."""
-        group = _make_group(num_cells=1, rollout_manager=MagicMock())
+    async def test_none_rollout_id_logs_event(self):
+        """The initial out-of-loop sync (rollout_id=None) still logs an event with rollout_id=None."""
+        rollout_mgr = MagicMock()
+        rollout_mgr.check_weights.remote = AsyncMock(return_value=_checksum_response([{"w": "e0"}]))
+        group = _make_group(num_cells=1, rollout_manager=rollout_mgr)
 
-        with patch("miles.ray.train.group.is_event_logger_initialized", return_value=True):
-            with pytest.raises(AssertionError):
-                await group._maybe_log_engine_weight_checksums(rollout_id=None)
+        with patch("miles.ray.train.group.is_event_logger_initialized", return_value=True), patch(
+            "miles.ray.train.group.get_event_logger"
+        ) as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+
+            await group._maybe_log_engine_weight_checksums(rollout_id=None)
+
+        mock_logger.log.assert_called_once()
+        logged = mock_logger.log.call_args.args[1]
+        assert logged == dict(rollout_id=None, engine_checksums=[{"rank0/w": "e0"}])
 
     async def test_debug_train_only_skips_collection(self):
         """Without real rollout engines (debug_train_only), no check_weights request is issued."""

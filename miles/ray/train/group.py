@@ -244,7 +244,6 @@ class RayTrainGroup:
     async def _maybe_log_engine_weight_checksums(self, *, rollout_id: int | None) -> None:
         if not is_event_logger_initialized():
             return
-        assert rollout_id is not None
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
