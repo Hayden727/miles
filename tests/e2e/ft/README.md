@@ -319,9 +319,13 @@ Architecture (external fault injection, not inside training loop):
   1. Start training with indep_dp + control server (port 18080) + mini FT controller
   2. Start a background daemon thread that:
      a. Sleeps a random interval (exponential distribution, mean ~60s / crash_probability)
-     b. GET /api/v1/cells — discover alive cells
-     c. Pick a random alive cell (skip if <=1 alive)
-     d. POST /api/v1/cells/{name}/inject-fault with random failure mode
+     b. GET /api/v1/cells — read each cell's Healthy condition
+     c. Count the genuinely-alive cells — reported Healthy, minus cells we injected that have
+        not finished a down->up recovery (RecoveryGate) — and skip if injecting would leave
+        <=1 of them. The control server reports a just-killed cell Healthy for ~95s >> the
+        inject interval, so excluding still-recovering cells is what keeps >=1 live replica
+        (indep_dp cannot heal from zero survivors).
+     d. Otherwise POST /api/v1/cells/{name}/inject-fault with a random failure mode
      e. Repeat until training finishes
   3. The actor's inject_fault() runs in a dedicated ray concurrency group thread
      and kills the process immediately (SIGKILL, os._exit, or segfault)

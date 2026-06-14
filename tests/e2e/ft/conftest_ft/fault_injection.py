@@ -1,9 +1,9 @@
 # NOTE: You MUST read tests/e2e/ft/README.md as source-of-truth and documentations
 
+import enum
 import logging
 import random
 import threading
-import time
 from collections.abc import Callable
 
 import requests
@@ -14,12 +14,35 @@ logger = logging.getLogger(__name__)
 
 CONTROL_SERVER_PORT: int = 18080
 MEAN_INTERVAL_SECONDS: float = 60.0
-# Hard floor between consecutive injections so the FT controller has time to
-# spawn the replacement actor and let it rejoin before the next crash. Without
-# this, the exponential delay can produce several injections within a few
-# seconds, causing the all-cells-dead cascade.
-MIN_GAP_BETWEEN_INJECTIONS_SECONDS: float = 30.0
 FAILURE_MODES: list[FailureMode] = [FailureMode.SIGKILL, FailureMode.EXIT, FailureMode.SEGFAULT]
+
+
+def cell_is_alive(cell: dict) -> bool:
+    return any(cond["type"] == "Healthy" and cond["status"] == "True" for cond in cell["status"]["conditions"])
+
+
+class _CellState(enum.Enum):
+    INJECTED = enum.auto()  # we crashed it; the control server may still report it Healthy
+    RECOVERING = enum.auto()  # observed unhealthy; awaiting its return to Healthy
+
+
+class RecoveryGate:
+    def __init__(self) -> None:
+        self._state_of_cell_name: dict[str, _CellState] = {}
+
+    def note_injected(self, cell_name: str) -> None:
+        self._state_of_cell_name[cell_name] = _CellState.INJECTED
+
+    def observe(self, cells_by_name: dict[str, dict]) -> None:
+        for name, state in list(self._state_of_cell_name.items()):
+            cell = cells_by_name.get(name)
+            if cell is None or not cell_is_alive(cell):
+                self._state_of_cell_name[name] = _CellState.RECOVERING
+            elif state is _CellState.RECOVERING:
+                del self._state_of_cell_name[name]
+
+    def genuinely_alive(self, cells: list[dict]) -> list[dict]:
+        return [c for c in cells if cell_is_alive(c) and c["metadata"]["name"] not in self._state_of_cell_name]
 
 
 def run_fault_injection_loop(
@@ -31,21 +54,12 @@ def run_fault_injection_loop(
     on_successful_injection: Callable[[], None],
 ) -> None:
     rng = random.Random(seed)
-    last_injection_at: float = 0.0
+    gate = RecoveryGate()
 
     while not stop_event.is_set():
         delay = rng.expovariate(1.0 / mean_interval_seconds)
         if stop_event.wait(timeout=delay):
             break
-
-        elapsed = time.monotonic() - last_injection_at
-        if elapsed < MIN_GAP_BETWEEN_INJECTIONS_SECONDS:
-            logger.info(
-                "Skipping injection: only %.1fs since last, need %.1fs",
-                elapsed,
-                MIN_GAP_BETWEEN_INJECTIONS_SECONDS,
-            )
-            continue
 
         try:
             resp = requests.get(f"{base_url}/api/v1/cells", timeout=5)
@@ -55,23 +69,11 @@ def run_fault_injection_loop(
             logger.info("Failed to list cells from control server", exc_info=True)
             continue
 
-        # A cell is "alive" iff its Healthy condition is TRUE. Note: phase=="Running"
-        # is also true for StateAllocatedErrored (cell crashed mid-step but not yet
-        # cleaned up), so phase alone is too permissive.
-        def _is_alive(cell: dict) -> bool:
-            return any(cond["type"] == "Healthy" and cond["status"] == "True" for cond in cell["status"]["conditions"])
-
-        alive = [c for c in cells if _is_alive(c)]
-        # Skip injection only when killing one more would leave us with no
-        # redundancy left (≤1 alive). Otherwise inject — even if some peers
-        # are still mid-recovery, we tolerate further reductions because dp
-        # still has spare cells.
+        # Keep >=1 cell genuinely alive (excludes cells still recovering from our own injection).
+        gate.observe({c["metadata"]["name"]: c for c in cells})
+        alive = gate.genuinely_alive(cells)
         if len(alive) <= 1:
-            logger.info(
-                "Skipping injection: %d/%d cells alive (need >1 to keep redundancy)",
-                len(alive),
-                len(cells),
-            )
+            logger.info("Skipping injection: %d genuinely-alive cell(s), need >1 to keep a live replica", len(alive))
             continue
 
         target = rng.choice(alive)
@@ -85,7 +87,7 @@ def run_fault_injection_loop(
                 timeout=5,
             )
             resp.raise_for_status()
-            last_injection_at = time.monotonic()
+            gate.note_injected(cell_name)
             on_successful_injection()
         except Exception:
             logger.info("Failed to inject fault into %s", cell_name, exc_info=True)
