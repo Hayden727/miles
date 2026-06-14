@@ -66,13 +66,6 @@ class UpdateWeightFromDistributed(DistBucketedWeightUpdateMixin):
         if self._is_source:
             if (g := self._model_update_groups) is not None:
                 disconnect_rollout_engines_from_distributed(self.args, self._group_name, g, self.rollout_engines)
-            else:
-                # A respawned (FT-healed) cell has no local group handle, yet the engines may
-                # still hold the group created by the now-dead actor; init_weights_update_group
-                # would then 400 with "group name already created". Tear down the engine-side
-                # group by name first (destroy_weights_update_group is idempotent — it no-ops
-                # when the group is absent, e.g. on the very first connect).
-                ray.get([engine.destroy_weights_update_group.remote(self._group_name) for engine in rollout_engines])
             self._model_update_groups = connect_rollout_engines_from_distributed(
                 self.args, self._group_name, rollout_engines
             )
