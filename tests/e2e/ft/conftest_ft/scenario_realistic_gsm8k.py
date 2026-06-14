@@ -117,12 +117,7 @@ def _get_gsm8k_train_args(*, seed: int, num_rollout: int, metric_threshold: floa
         "--max-tokens-per-gpu 9216 "
     )
 
-    grpo_args = (
-        "--advantage-estimator grpo "
-        "--entropy-coef 0.00 "
-        "--eps-clip 0.2 "
-        "--eps-clip-high 0.28 "
-    )
+    grpo_args = "--advantage-estimator grpo " "--entropy-coef 0.00 " "--eps-clip 0.2 " "--eps-clip-high 0.28 "
 
     optimizer_args = (
         "--optimizer adam "
