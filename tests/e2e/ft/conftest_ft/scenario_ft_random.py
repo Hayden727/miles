@@ -48,10 +48,6 @@ def run_ci(
 
     prepare(ft_mode)
 
-    # Real-rollout modes generate with live sglang engines and update weights to them, so they
-    # ignore recorded data; only debug-train-only modes need the cyclic symlinks. The recorded
-    # debug rollouts are fewer than the soak's step count, so symlink them cyclically into a temp
-    # dir so each rollout_id has a file, keeping the production load path unchanged.
     debug_rollout_data_dir = None if ft_mode.has_real_rollout else materialize_cyclic_debug_rollout_data(num_steps)
     train_args = (
         get_common_train_args(
