@@ -554,7 +554,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             reload_process_groups()
 
-        if has_new_engines:
+        if has_new_engines or not self.weight_updater.is_rollout_engines_connected():
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
