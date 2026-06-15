@@ -2,7 +2,6 @@
 # WARNING: Do NOT relax any assert logic in this file. All assertions must remain strict.
 
 
-import os
 from pathlib import Path
 from typing import Annotated
 
@@ -59,26 +58,17 @@ def run_ci(
         + "--mini-ft-controller-enable "
     )
 
-    # HACK ft-hang-repro: when the deterministic update_weights self-kill is armed, it is the
-    # ONLY fault, so the wedge reproduces cleanly with no random-injection noise; skip the random
-    # injector and its post-run assertion. Revert via `git grep 'HACK ft-hang-repro'`.
-    injector = (
-        None
-        if os.environ.get("MILES_FT_HACK_KILL_AT_UPDATE_WEIGHTS")
-        else spawn_fault_injector(seed=seed, mean_interval_seconds=mean_interval)
-    )
+    injector = spawn_fault_injector(seed=seed, mean_interval_seconds=mean_interval)
 
     try:
         run_training(train_args=train_args, mode=ft_mode, dump_dir=dump_dir)
     finally:
-        if injector is not None:
-            injector.stop_and_join(timeout_seconds=5)
+        injector.stop_and_join(timeout_seconds=5)
 
-    if injector is not None:
-        assert_soak_reconfigure_events(
-            Path(dump_dir) / "events",
-            num_successful_injections=injector.num_successful_injections,
-        )
+    assert_soak_reconfigure_events(
+        Path(dump_dir) / "events",
+        num_successful_injections=injector.num_successful_injections,
+    )
 
     print(f"Random failure soak test PASSED (seed={seed}, steps={num_steps})")
 

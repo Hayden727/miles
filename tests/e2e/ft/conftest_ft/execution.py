@@ -173,19 +173,6 @@ _TRAINER_FT_ENV_VARS: dict[str, str] = {
     "MILES_EXPERIMENTAL_FT_TRAINER": "1",
 }
 
-# HACK ft-hang-repro: NCCL flight recorder so a wedged collective can be inspected without
-# guessing. TEMP_FILE is where TORCH_NCCL_DUMP_ON_TIMEOUT writes the per-rank collective trace
-# on a watchdog timeout; DESYNC_DEBUG makes that timeout report which collective each rank is
-# stuck on. No DEBUG_INFO_PIPE_FILE: its persistent FIFO is named only by cell-local rank, so
-# the two same-node cells would collide on /tmp/nccl_pipe_rank_0; py-spy --native is the primary
-# live-stack tool instead. Revert via `git grep 'HACK ft-hang-repro'`.
-_HANG_REPRO_ENV_VARS: dict[str, str] = {
-    "TORCH_NCCL_TRACE_BUFFER_SIZE": "20000",
-    "TORCH_NCCL_DUMP_ON_TIMEOUT": "1",
-    "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": "/tmp/nccl_trace_rank_",
-    "TORCH_NCCL_DESYNC_DEBUG": "1",
-}
-
 
 def run_training(
     train_args: str,
@@ -196,16 +183,9 @@ def run_training(
 ) -> None:
     if dump_dir is not None and os.path.exists(dump_dir):
         shutil.rmtree(dump_dir)
-    hang_repro_env = {
-        k: os.environ[k]
-        for k in ("MILES_FT_HACK_KILL_AT_UPDATE_WEIGHTS", "MILES_FT_HACK_KILL_PHASE")
-        if k in os.environ
-    }
     merged_env_vars = {
         **_DETERMINISTIC_ENV_VARS,
         **_TRAINER_FT_ENV_VARS,
-        **(_HANG_REPRO_ENV_VARS if hang_repro_env else {}),
-        **hang_repro_env,
         # Run eager (no torch.compile). A cell respawned after a crash cold-recompiles its first
         # forward; under dynamic batch sizes that is a per-shape Inductor compile that is slow
         # (observed 124s..1510s, growing) and memory-heavy enough to OOM-kill the actor. That

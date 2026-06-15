@@ -7,7 +7,6 @@ from tqdm import tqdm
 
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.distributed_utils import get_gloo_group
-from miles.utils.test_utils.hang_repro_hack import maybe_kill_at_update_weights
 from miles.utils.timer import timer
 
 from ...megatron_to_hf import convert_to_hf
@@ -216,8 +215,6 @@ class DistBucketedWeightUpdateMixin:
 
         self._pause_and_prepare_engines()
         dist.barrier(group=get_gloo_group())
-
-        maybe_kill_at_update_weights("after_pause_before_gather")
 
         with timer("update_weights_implementation"):
             pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_source else None
