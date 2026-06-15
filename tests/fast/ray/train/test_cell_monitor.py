@@ -96,11 +96,15 @@ class TestComputeCellStatusOtherStates:
         assert allocated.status == TriState.FALSE
         assert all(c.type != "Healthy" for c in result.conditions)
 
-    def test_stopped_reports_suspended_phase_no_healthy_condition(self):
+    def test_stopped_reports_unhealthy_so_controller_reheals(self):
+        """A shrunk-out (stopped) cell must report Healthy=FALSE so the FT controller re-heals it;
+        otherwise a train-detected crash strands it as Suspended and it is lost forever."""
         result = compute_cell_status(StateStopped(), TriState.UNKNOWN)
 
         assert result.phase == "Suspended"
-        assert all(c.type != "Healthy" for c in result.conditions)
+        healthy = _find_condition(result, "Healthy")
+        assert healthy.status == TriState.FALSE
+        assert healthy.reason == "Stopped"
 
 
 def _make_cell_mock(*, is_alive: bool, execute: AsyncMock) -> MagicMock:
