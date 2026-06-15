@@ -24,7 +24,7 @@ def create_indep_dp_group(
     megatron_world_size: int,
 ) -> GroupInfo:
     if indep_dp_info.alive_size <= 1:
-        return GroupInfo(rank=0, size=1, group=None)
+        return GroupInfo(rank=0, size=1, group=None, quorum_id=indep_dp_info.quorum_id)
 
     try:
         from torchft.process_group import ProcessGroupGloo, ProcessGroupNCCL
@@ -52,7 +52,13 @@ def create_indep_dp_group(
         f"Configured independent DP PG: {indep_dp_info}, "
         f"megatron_rank={megatron_rank}, megatron_world_size={megatron_world_size}"
     )
-    return GroupInfo(rank=indep_dp_info.alive_rank, size=indep_dp_info.alive_size, group=nccl_pg, gloo_group=gloo_pg)
+    return GroupInfo(
+        rank=indep_dp_info.alive_rank,
+        size=indep_dp_info.alive_size,
+        group=nccl_pg,
+        gloo_group=gloo_pg,
+        quorum_id=indep_dp_info.quorum_id,
+    )
 
 
 def reconfigure_indep_dp_group(
@@ -91,9 +97,10 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
     pg = parallel_state.indep_dp.group
     util = GeneralPGUtil.create(pg)
     logger.info(
-        "FT/xcell start kind=grad_allreduce cell_rank=%d members=%d",
+        "FT/xcell start kind=grad_allreduce cell_rank=%d members=%d quorum=%s",
         parallel_state.indep_dp.rank,
         parallel_state.indep_dp.size,
+        parallel_state.indep_dp.quorum_id,
     )
 
     allreduce_success = True
@@ -127,9 +134,10 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
     # get_gloo_group() is cell-local (created from the default world PG).
     consensus = collective_bool_and(value=allreduce_success, group=get_gloo_group())
     logger.info(
-        "FT/xcell end kind=grad_allreduce cell_rank=%d members=%d this_rank_ok=%s consensus_ok=%s",
+        "FT/xcell end kind=grad_allreduce cell_rank=%d members=%d quorum=%s this_rank_ok=%s consensus_ok=%s",
         parallel_state.indep_dp.rank,
         parallel_state.indep_dp.size,
+        parallel_state.indep_dp.quorum_id,
         allreduce_success,
         consensus,
     )

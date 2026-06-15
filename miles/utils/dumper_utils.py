@@ -278,13 +278,19 @@ def _barrier_after_dump_dir_cleanup() -> None:
 
     indep_dp = get_parallel_state().indep_dp
     if indep_dp.group is not None:
-        logger.info("FT/xcell start kind=dump_barrier cell_rank=%d members=%d", indep_dp.rank, indep_dp.size)
+        logger.info(
+            "FT/xcell start kind=dump_barrier cell_rank=%d members=%d quorum=%s",
+            indep_dp.rank,
+            indep_dp.size,
+            indep_dp.quorum_id,
+        )
         try:
             indep_dp.group.barrier()
             logger.info(
-                "FT/xcell end kind=dump_barrier cell_rank=%d members=%d success=True",
+                "FT/xcell end kind=dump_barrier cell_rank=%d members=%d quorum=%s success=True",
                 indep_dp.rank,
                 indep_dp.size,
+                indep_dp.quorum_id,
             )
         except Exception:
             # A dead peer aborts the cross-cell PG and releases this barrier with an
