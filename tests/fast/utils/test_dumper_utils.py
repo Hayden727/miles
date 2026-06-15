@@ -166,7 +166,7 @@ class TestBarrierAfterDumpDirCleanup:
         """A peer death aborts the cross-cell PG mid-barrier; the survivor continues instead of erroring."""
         group = MagicMock()
         group.barrier.side_effect = RuntimeError("NCCL communicator was aborted on rank 1")
-        state = SimpleNamespace(indep_dp=SimpleNamespace(rank=1, group=group))
+        state = SimpleNamespace(indep_dp=SimpleNamespace(rank=1, size=2, group=group, debug_info={"quorum": 0}))
 
         with (
             patch("miles.utils.dumper_utils.get_parallel_state", return_value=state),
