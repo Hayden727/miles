@@ -67,6 +67,7 @@ def run_ci(
                 # its first forward, which is slow and memory-heavy enough to OOM.
                 "TORCHDYNAMO_DISABLE": "1",
                 "RAY_DEDUP_LOGS": "0",
+                "SGLANG_LOG_MS": "1",
             },
         )
     finally:

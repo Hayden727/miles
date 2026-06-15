@@ -198,6 +198,7 @@ def run_training(
         # bounded recompile) so the tests can exercise the compiled path again.
         "TORCHDYNAMO_DISABLE": "1",
         "RAY_DEDUP_LOGS": "0",
+        "SGLANG_LOG_MS": "1",
         **(extra_env_vars or {}),
     }
     U.execute_train(
