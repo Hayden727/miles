@@ -161,6 +161,11 @@ class SimpleHealthChecker(BaseHealthChecker):
                     if self._consecutive_failures >= self._config.failure_threshold:
                         self._status = TriState.FALSE
 
+                logger.info(
+                    f"FT/health {self._name} poll ok={success} status={self._status.value} "
+                    f"consecutive_failures={self._consecutive_failures}"
+                )
+
                 if prev_status != self._status:
                     logger.info(
                         f"[{self._name}] Status changed: {prev_status.value} -> {self._status.value} "
