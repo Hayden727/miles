@@ -25,7 +25,7 @@ def create_indep_dp_group(
     megatron_world_size: int,
 ) -> GroupInfo:
     if indep_dp_info.alive_size <= 1:
-        return GroupInfo(rank=0, size=1, group=None, quorum_id=indep_dp_info.quorum_id)
+        return GroupInfo(rank=0, size=1, group=None, debug_info={"quorum": indep_dp_info.quorum_id})
 
     try:
         from torchft.process_group import ProcessGroupGloo, ProcessGroupNCCL
@@ -64,7 +64,7 @@ def create_indep_dp_group(
         size=indep_dp_info.alive_size,
         group=nccl_pg,
         gloo_group=gloo_pg,
-        quorum_id=indep_dp_info.quorum_id,
+        debug_info={"quorum": indep_dp_info.quorum_id},
     )
 
 
@@ -117,7 +117,7 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
         kind="grad_allreduce",
         cell_rank=parallel_state.indep_dp.rank,
         members=parallel_state.indep_dp.size,
-        quorum=parallel_state.indep_dp.quorum_id,
+        **parallel_state.indep_dp.debug_info,
     )
 
     allreduce_success = True
@@ -164,7 +164,7 @@ def _allreduce_grads_across_replicas(args, model: Sequence["DDP"], parallel_stat
         kind="grad_allreduce",
         cell_rank=parallel_state.indep_dp.rank,
         members=parallel_state.indep_dp.size,
-        quorum=parallel_state.indep_dp.quorum_id,
+        **parallel_state.indep_dp.debug_info,
         this_rank_ok=allreduce_success,
         consensus_ok=consensus,
     )

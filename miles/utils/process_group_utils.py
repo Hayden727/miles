@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -20,7 +20,7 @@ class GroupInfo:
     group: dist.ProcessGroup | None
     gloo_group: dist.ProcessGroup | None = None
     src_rank: int | None = None
-    quorum_id: int | None = None
+    debug_info: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._verify_group(self.group, "group")

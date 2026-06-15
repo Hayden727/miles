@@ -286,7 +286,7 @@ def _barrier_after_dump_dir_cleanup() -> None:
             kind="dump_barrier",
             cell_rank=indep_dp.rank,
             members=indep_dp.size,
-            quorum=indep_dp.quorum_id,
+            **indep_dp.debug_info,
         )
         try:
             indep_dp.group.barrier()
@@ -297,7 +297,7 @@ def _barrier_after_dump_dir_cleanup() -> None:
                 kind="dump_barrier",
                 cell_rank=indep_dp.rank,
                 members=indep_dp.size,
-                quorum=indep_dp.quorum_id,
+                **indep_dp.debug_info,
                 success=True,
             )
         except Exception:
@@ -311,7 +311,7 @@ def _barrier_after_dump_dir_cleanup() -> None:
                 kind="dump_barrier",
                 cell_rank=indep_dp.rank,
                 members=indep_dp.size,
-                quorum=indep_dp.quorum_id,
+                **indep_dp.debug_info,
                 success=False,
                 degraded=True,
                 exc_info=True,
