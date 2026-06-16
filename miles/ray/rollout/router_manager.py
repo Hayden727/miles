@@ -30,7 +30,8 @@ def _maybe_enable_router_dp_aware(args, router_args) -> None:
     ``MILES_DISABLE_AUTO_DP_AWARE=1`` opt-out, warning loudly in the opt-out case
     since it reintroduces the prefix-cache fragmentation.
     """
-    if getattr(args, "sglang_dp_size", 1) <= 1 or router_args.dp_aware:
+    dp_size = getattr(args, "sglang_dp_size", 1) or 1
+    if dp_size <= 1 or getattr(router_args, "dp_aware", False):
         return
     if os.environ.get("MILES_DISABLE_AUTO_DP_AWARE") == "1":
         logger.warning(
@@ -39,14 +40,14 @@ def _maybe_enable_router_dp_aware(args, router_args) -> None:
             "per-engine and SGLang will scatter requests across DP ranks by load, fragmenting "
             "the radix prefix cache and likely reducing the KV-cache hit rate. Unset the env "
             "var to restore prefix-affinity routing.",
-            args.sglang_dp_size,
+            dp_size,
         )
         return
     router_args.dp_aware = True
     logger.info(
         "DP attention enabled (sglang_dp_size=%d); auto-enabling router dp_aware routing to "
         "preserve prefix-cache locality.",
-        args.sglang_dp_size,
+        dp_size,
     )
 
 
