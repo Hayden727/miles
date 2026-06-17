@@ -10,7 +10,6 @@ register_cuda_ci(
     est_time=600,
     suite="stage-c-8-gpu-h100",
     labels=["megatron", "weight-update"],
-    disabled="RDMA weight update is not supported by current CI machine.",
 )
 
 
