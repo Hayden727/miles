@@ -1,10 +1,22 @@
+import logging
+
 import torch
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 def apply_fsdp_moe_patch():
 
     from transformers.models.qwen3_moe import modeling_qwen3_moe
+
+    # transformers >= 5.6 refactored qwen3_moe to batched Qwen3MoeExperts + Qwen3MoeTopKRouter.
+    # Batched expert params already get full-shaped grads for unused experts, so the legacy
+    # graph-forcing patch below is unnecessary; it is also incompatible (self.gate now returns
+    # a tuple) and would crash with "'tuple' object has no attribute 'softmax'". Skip it.
+    if hasattr(modeling_qwen3_moe, "Qwen3MoeTopKRouter") or hasattr(modeling_qwen3_moe, "Qwen3MoeExperts"):
+        logger.info("[fsdp] qwen3_moe uses batched experts (transformers>=5.6); skipping legacy MoE patch")
+        return
 
     def _forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
