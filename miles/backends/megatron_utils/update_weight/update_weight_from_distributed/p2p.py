@@ -275,7 +275,9 @@ class UpdateWeightP2P(DistBucketedWeightUpdateMixin):
         # sglang renamed the module-level post_load_weights to _post_load_weights
         # (private) in newer builds; get_model() calls it internally via module
         # global, so patch whichever name this build exposes.
-        post_load_attr = "post_load_weights" if hasattr(model_loader_module, "post_load_weights") else "_post_load_weights"
+        post_load_attr = (
+            "post_load_weights" if hasattr(model_loader_module, "post_load_weights") else "_post_load_weights"
+        )
         original_post_load_weights = getattr(model_loader_module, post_load_attr)
         setattr(model_loader_module, post_load_attr, lambda *args, **kwargs: None)
         try:
