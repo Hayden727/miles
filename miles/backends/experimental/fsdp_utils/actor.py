@@ -81,7 +81,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train and self.fsdp_cpu_offload:
             self.args.offload_train = False
 
-        self._enable_true_on_policy_optimizations(args)
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
 
@@ -107,6 +106,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         apply_hf_compat_patches(self.hf_config)
 
+        # Needs hf_config (gates the qwen3_moe-specific MoE patches on model_type), so run after load.
+        self._enable_true_on_policy_optimizations(args)
+
         init_context = self._get_init_weight_context_manager()
 
         with init_context():
@@ -121,6 +123,14 @@ class FSDPTrainRayActor(TrainRayActor):
         from .hf_compat_patches import reload_clobbered_checkpoint_params
 
         reload_clobbered_checkpoint_params(model, self.args.hf_checkpoint, self.hf_config)
+
+        # NemotronH Mamba2: HF training uses a fully-fused mamba kernel while the sglang rollout uses an
+        # un-fused conv+scan+norm+out_proj chain; the op-order difference inflates the train/rollout
+        # logprob diff (~0.045). Force HF down its own un-fused branch so it matches sglang.
+        if "nemotron_h" in str(getattr(self.hf_config, "model_type", "") or "").lower():
+            from .models.nemotron_h import apply_nemotron_h_sglang_match_patch
+
+            apply_nemotron_h_sglang_match_patch(model)
 
         model.train()
 
@@ -193,10 +203,12 @@ class FSDPTrainRayActor(TrainRayActor):
             return AutoModelForCausalLM
 
     def _enable_true_on_policy_optimizations(self, args):
+        # The qwen3_moe MoE patches are arch-specific (and the true-on-policy one imports sglang fused-MoE
+        # kernels that don't exist for every sglang build); gate them on model_type so other archs
+        # (nemotron_h Mamba, dense Qwen3, ...) can use true-on-policy / recompute-logprobs-via-prefill.
+        model_type = str(getattr(self.hf_config, "model_type", "") or "")
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
-
-            from .models.qwen3_moe import apply_true_on_policy_patch_for_qwen3_moe
 
             logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
@@ -205,8 +217,11 @@ class FSDPTrainRayActor(TrainRayActor):
                 enable_bmm=False,
             )
 
-            apply_true_on_policy_patch_for_qwen3_moe()
-        else:
+            if model_type == "qwen3_moe":
+                from .models.qwen3_moe import apply_true_on_policy_patch_for_qwen3_moe
+
+                apply_true_on_policy_patch_for_qwen3_moe()
+        elif model_type == "qwen3_moe":
             from .models.qwen3_moe_hf import apply_fsdp_moe_patch
 
             apply_fsdp_moe_patch()
