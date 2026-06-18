@@ -50,11 +50,15 @@ def _split_batched_moe_expert(name, full):
     yield from _qwen3_moe_expand(name, full)
 
 
-def _iter_sync_named_params(name, param, model_type):
+def _iter_sync_named_params(name, param, model_type, orig_dtypes=None):
     """Yield (name, tensor) pairs to stream to the rollout engine, applying the registered
     WeightBridge transform for this model type (e.g. splitting batched MoE experts into the
     per-expert names SGLang requires). Params with no matching transform stream unchanged so the
     caller's existing DTensor/async path is preserved.
+
+    ``orig_dtypes`` (optional) maps param name -> on-disk dtype: when an fp32 master is kept (glm4_moe_lite,
+    so the FSDP reshard is bit-exact), the materialized tensor is downcast back to its on-disk dtype here
+    so SGLang receives exactly what a clean disk load produces.
     """
     expand = get_param_transform(name, param, model_type)
     if expand is None:
@@ -69,6 +73,10 @@ def _iter_sync_named_params(name, param, model_type):
         full = full.redistribute(
             placements=[Replicate()] * full.device_mesh.ndim,
         ).to_local()
+    if orig_dtypes is not None:
+        target = orig_dtypes.get(name)
+        if target is not None and full.dtype != target:
+            full = full.to(target)
     yield from expand(name, full)
 
 
@@ -100,8 +108,11 @@ class UpdateWeight(abc.ABC):
         bucket = []
         bucket_size = 0
         model_type = getattr(getattr(self.model, "config", None), "model_type", "")
+        # When an fp32 master is kept (glm4_moe_lite — so the FSDP reshard is bit-exact), restore each
+        # param's on-disk dtype before streaming so SGLang receives exactly what a clean disk load gives.
+        orig_dtypes = getattr(self.model, "_fsdp_sync_orig_dtypes", None)
         for raw_name, raw_param in self.model.state_dict().items():
-            for name, param in _iter_sync_named_params(raw_name, raw_param, model_type):
+            for name, param in _iter_sync_named_params(raw_name, raw_param, model_type, orig_dtypes):
                 param_size = param.numel() * param.element_size()
                 if bucket and bucket_size + param_size >= self.args.update_weight_buffer_size:
                     self.wait_and_update_bucket_weights(bucket)
@@ -109,6 +120,9 @@ class UpdateWeight(abc.ABC):
                     bucket = []
                     bucket_size = 0
 
+                # Names produced by the WeightBridge expert-split are already cast in _iter_sync_named_params;
+                # only un-transformed (passthrough) names are looked up here (None -> no cast).
+                target_dtype = orig_dtypes.get(name) if orig_dtypes is not None else None
                 param = param.cuda()
                 if isinstance(param, DTensor):
                     # async version of param.full_tensor
@@ -116,7 +130,7 @@ class UpdateWeight(abc.ABC):
                         placements=[Replicate()] * param.device_mesh.ndim,
                         async_op=True,
                     ).to_local()
-                bucket.append((name, param))
+                bucket.append((name, param, target_dtype))
                 bucket_size += param_size
 
         if bucket:
@@ -131,8 +145,17 @@ class UpdateWeight(abc.ABC):
         dist.barrier(group=get_gloo_group())
 
     def wait_and_update_bucket_weights(self, bucket):
-        bucket = [(name, param.wait()) if hasattr(param, "wait") else (name, param) for name, param in bucket]
-        self.update_bucket_weights(bucket, weight_version=self.weight_version)
+        resolved = []
+        for name, param, target_dtype in bucket:
+            if hasattr(param, "wait"):
+                param = param.wait()
+            # Downcast the fp32-master gather back to the param's on-disk dtype (bf16 for weights). The
+            # fp32 value is the exact on-disk value, so this round-to-nearest-even reproduces the disk
+            # bf16 bit-for-bit. None target (already-correct dtype, incl. bridge-split experts) is a no-op.
+            if target_dtype is not None and param.dtype != target_dtype:
+                param = param.to(target_dtype)
+            resolved.append((name, param))
+        self.update_bucket_weights(resolved, weight_version=self.weight_version)
 
     @abc.abstractmethod
     def update_bucket_weights(self, named_tensors, weight_version=None) -> None:
