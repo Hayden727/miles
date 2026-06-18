@@ -1,18 +1,8 @@
 from .math_utils import extract_answer, grade_answer_mathd, grade_answer_sympy
 
 
-def get_deepscaler_rule_based_reward(response, label):
-    if "</think>" in response:
-        model_solution = response.split("</think>")[-1]
-    elif "###Response" in response:
-        model_solution = response.split("###Response")[1]
-    else:
-        # Models that do not emit </think>/###Response markers (e.g. Gemma-4,
-        # which wraps reasoning in <|channel>thought ... <channel|> tags) would
-        # otherwise score 0 even on correct answers. Fall back to the whole
-        # response so the trailing \boxed{} answer is still extracted.
-        model_solution = response
-
+def _grade_boxed_solution(model_solution, label):
+    """Extract the \\boxed{} answer from ``model_solution`` and grade it against ``label``."""
     model_answer = extract_answer(model_solution)
     if model_answer is None:
         return 0
@@ -44,3 +34,30 @@ def get_deepscaler_rule_based_reward(response, label):
             return 1
 
     return 0
+
+
+def get_deepscaler_rule_based_reward(response, label):
+    if "</think>" in response:
+        model_solution = response.split("</think>")[-1]
+    elif "###Response" in response:
+        model_solution = response.split("###Response")[1]
+    else:
+        return 0
+
+    return _grade_boxed_solution(model_solution, label)
+
+
+def get_gemma_math_reward(response, label):
+    """Boxed-answer math reward for Gemma-4, kept separate from the shared deepscaler gate.
+
+    Gemma-4 wraps its reasoning in ``<|channel>thought ... <channel|>`` tags rather than
+    ``</think>`` / ``###Response``. In the default (thinking-off) chat-template setup the Gemma-4
+    RL scripts use, the prompt pre-emits and closes the thought channel, so the response is the
+    answer alone with no marker -- which the shared ``get_deepscaler_rule_based_reward`` gate would
+    score 0 even when correct. Rather than loosen that gate for every ``--rm-type deepscaler`` run,
+    grade the whole response here; if reasoning IS emitted (thinking-on), grade only the text after
+    the final ``<channel|>`` close tag.
+    """
+    if "<channel|>" in response:
+        response = response.split("<channel|>")[-1]
+    return _grade_boxed_solution(response, label)

@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
+   --rm-type gemma_math
    --num-rollout 10
    --rollout-batch-size 4
    --n-samples-per-prompt 2
