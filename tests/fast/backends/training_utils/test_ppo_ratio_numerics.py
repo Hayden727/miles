@@ -39,5 +39,14 @@ def test_low_var_kl_extreme_log_ratios_stay_finite():
     kl = compute_approx_kl(log_probs, log_probs_base, kl_loss_type="low_var_kl")
 
     assert torch.isfinite(kl).all().item()
-    assert torch.all(kl <= 10).item()
-    assert torch.all(kl >= -10).item()
+
+
+def test_low_var_kl_matches_unclamped_formula_for_normal_log_ratios():
+    log_probs = torch.tensor([-0.1, 0.0, 0.1], dtype=torch.float32)
+    log_probs_base = torch.zeros_like(log_probs)
+
+    kl = compute_approx_kl(log_probs, log_probs_base, kl_loss_type="low_var_kl")
+
+    log_ratio = -(log_probs - log_probs_base)
+    expected_kl = log_ratio.exp() - 1 - log_ratio
+    torch.testing.assert_close(kl, expected_kl)
