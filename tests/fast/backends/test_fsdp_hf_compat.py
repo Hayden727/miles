@@ -132,25 +132,68 @@ def test_weight_bridge_registry():
 
 def test_model_patch_registry_gating():
     # The ModelPatchHook registry replaces the hardcoded per-arch dispatch in apply_hf_compat_patches.
-    # Verify the predicates gate correctly (s_aux always; config-checks need a config; GDN needs gated-deltanet).
-    from types import SimpleNamespace
-
+    # Verify the predicates gate correctly (s_aux always; config-checks need a config). Packed-sequence
+    # layout patches (GDN, ...) moved out of this registry into the unified packing registry
+    # (test_packing_registry below); apply_hf_compat_patches now dispatches them via apply_packing.
     from miles.backends.experimental.fsdp_utils.hf_compat_patches import _MODEL_PATCH_HOOKS
 
     by_name = {h.name: h for h in _MODEL_PATCH_HOOKS}
-    # the four expected hooks are registered, in order
-    assert [h.name for h in _MODEL_PATCH_HOOKS][:4] == [
+    # the three expected hooks are registered, in order (GDN packing no longer a ModelPatchHook)
+    assert [h.name for h in _MODEL_PATCH_HOOKS][:3] == [
         "flash_attn_saux_guard",
         "fp8_checkpoint_guard",
         "dsa_train_infer_warn",
-        "gated_deltanet_packing",
     ]
+    assert "gated_deltanet_packing" not in by_name
     # s_aux guard runs even without a config; the others don't
     assert by_name["flash_attn_saux_guard"].applies_to(None)
     assert not by_name["fp8_checkpoint_guard"].applies_to(None)
-    assert not by_name["gated_deltanet_packing"].applies_to(None)
-    # GDN packing fires for a gated-deltanet arch, not for a dense one
+
+
+def test_packed_seq_context_boundaries():
+    # The shared boundary derivation (formerly duplicated verbatim in nemotron_h.py + qwen3_5_moe.py).
+    from miles.backends.experimental.fsdp_utils.packing.boundaries import packed_seq_context
+
+    # single document / non-packed / wrong shape -> None (packing is a no-op)
+    assert packed_seq_context(None) is None
+    assert packed_seq_context(torch.arange(8).view(1, 8)) is None  # one doc, never resets to 0
+    assert packed_seq_context(torch.arange(8)) is None  # not [1, T]
+    assert packed_seq_context(torch.zeros(2, 4, dtype=torch.long)) is None  # batch > 1
+
+    # three packed docs of length 3, 2, 4 -> position_ids reset to 0 at each start
+    pos = torch.tensor([[0, 1, 2, 0, 1, 0, 1, 2, 3]])
+    ctx = packed_seq_context(pos)
+    assert ctx is not None
+    assert ctx.cu_seqlens.tolist() == [0, 3, 5, 9]
+    assert ctx.cu_seqlens.dtype == torch.int32
+    assert ctx.seq_idx.tolist() == [[0, 0, 0, 1, 1, 2, 2, 2, 2]]
+    assert ctx.seq_idx.dtype == torch.int32
+    assert ctx.seq_idx.shape == (1, 9)
+    assert ctx.max_seqlen == 4
+
+
+def test_packing_registry():
+    # The unified packing registry dispatches per (model_type, lifetime); GDN is config-lifetime,
+    # NemotronH is post-load-lifetime, and archs that pack natively / don't pack match nothing.
+    from types import SimpleNamespace
+
+    from miles.backends.experimental.fsdp_utils.packing import get_packing_patches
+
     gdn = SimpleNamespace(model_type="qwen3_5_moe", layer_types=["linear_attention", "full_attention"])
+    nemo = SimpleNamespace(model_type="nemotron_h")
+    glm = SimpleNamespace(model_type="glm4_moe_lite", layer_types=["full_attention"])
     dense = SimpleNamespace(model_type="qwen3", layer_types=["full_attention"])
-    assert by_name["gated_deltanet_packing"].applies_to(gdn)
-    assert not by_name["gated_deltanet_packing"].applies_to(dense)
+
+    def names(cfg, lifetime):
+        return {p.name for p in get_packing_patches(cfg, lifetime)}
+
+    # GatedDeltaNet: config lifetime only
+    assert names(gdn, "config") == {"gated_deltanet_packing"}
+    assert names(gdn, "post_load") == set()
+    # NemotronH: post-load lifetime only
+    assert names(nemo, "post_load") == {"nemotron_h_packing"}
+    assert names(nemo, "config") == set()
+    # glm4_moe_lite (native MLA varlen) and dense qwen3: no packing patch at either lifetime
+    for cfg in (glm, dense, None):
+        assert names(cfg, "config") == set()
+        assert names(cfg, "post_load") == set()

@@ -1,45 +1,42 @@
-"""Reset GatedDeltaNet state at packed-document boundaries (FSDP backend).
+"""GatedDeltaNet packed-sequence fix for the FSDP backend (explicit cu_seqlens threading).
 
-The FSDP backend packs several documents into one forward (``--use-dynamic-batch-size``).
-The stock-HF GatedDeltaNet runs its linear-attention recurrence (fla chunk/recurrent) and
-its causal_conv1d over the whole packed row without sequence boundaries, so state bleeds
-across documents and the train/rollout logprob diff inflates ~0.015 -> ~0.07. The
-decoder-layer forward derives cu_seqlens/seq_idx from the packed position_ids and the
-GatedDeltaNet forward feeds them to the kernels so both states reset per document.
-GatedDeltaNet archs + THD packing (batch==1, >1 doc) only.
+The FSDP backend packs multiple (prompt+response) documents into one forward
+(``--use-dynamic-batch-size``). Softmax-attention layers handle this via varlen
+flash-attn + position_ids, but the stock-HF GatedDeltaNet runs its TWO stateful ops
+over the whole packed row without any sequence boundaries:
+
+  * the linear-attention recurrence (fla ``chunk_gated_delta_rule`` / ``fused_recurrent_*``), and
+  * the ``causal_conv1d`` short convolution.
+
+Both bleed across document boundaries, so every token after the first packed document
+gets a wrong hidden state -> the train/rollout logprob abs-diff inflates from ~0.015 to
+~0.07. (Megatron passes cu_seqlens to its GDN and stays ~0.02; the SGLang rollout runs
+each sequence separately, so it has no bleed -- the FSDP train side is the odd one out.)
+
+Fix (explicit, no global/thread-local state): the decoder-layer forward already receives
+the packed ``position_ids``; it derives ``cu_seqlens`` (recurrence) and ``seq_idx`` (conv)
+from them (the shared ``packed_seq_context`` derivation) and stashes them on its own
+GatedDeltaNet submodule. The GatedDeltaNet forward then injects them into the fla /
+causal_conv1d kernels so both states reset per document. Both run inside the
+gradient-checkpointed decoder layer, so the boundaries are recomputed identically on the
+backward pass (setting them at the outer model forward would break activation
+checkpointing, since that forward is not re-run during recomputation).
+
+This only affects the THD packing case (batch==1, >1 document) of GatedDeltaNet models;
+every other shape / model is left untouched.
 """
 
 import functools
 import logging
 
+from ..packing.boundaries import packed_seq_context
+
 logger = logging.getLogger(__name__)
 
 
-def _cu_seqlens_from_position_ids(position_ids):
-    import torch
-
-    if position_ids is None or position_ids.dim() != 2 or position_ids.shape[0] != 1:
-        return None
-    pos = position_ids.reshape(-1)
-    starts = (pos == 0).nonzero(as_tuple=True)[0]
-    if starts.numel() <= 1:
-        return None
-    total = torch.tensor([pos.numel()], device=pos.device, dtype=starts.dtype)
-    return torch.cat([starts, total]).to(torch.int32)
-
-
-def _seq_idx_from_position_ids(position_ids):
-    import torch
-
-    if position_ids is None or position_ids.dim() != 2 or position_ids.shape[0] != 1:
-        return None
-    seq_idx = torch.cumsum((position_ids == 0).to(torch.int32), dim=-1) - 1
-    if int(seq_idx.max()) <= 0:
-        return None
-    return seq_idx.to(torch.int32)
-
-
 def _inject_kwarg(fn, key, value):
+    """Wrap a kernel callable to default a kwarg (cu_seqlens / seq_idx) when unset."""
+
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
         if kwargs.get(key) is None:
@@ -49,26 +46,30 @@ def _inject_kwarg(fn, key, value):
     return wrapped
 
 
-# (kernel instance-attr, kwarg name, GatedDeltaNet attr holding the boundary tensor)
-_INJECT = (
-    ("chunk_gated_delta_rule", "cu_seqlens", "_gdn_cu_seqlens"),
-    ("recurrent_gated_delta_rule", "cu_seqlens", "_gdn_cu_seqlens"),
-    ("causal_conv1d_fn", "seq_idx", "_gdn_seq_idx"),
-)
-
-
 def _patch_gdn_forward(gdn_cls):
     orig = gdn_cls.forward
     if getattr(orig, "_gdn_packing", False):
         return
 
+    # The recurrence / conv kernels are stored as *instance* attributes on the module
+    # (self.chunk_gated_delta_rule, self.causal_conv1d_fn, ...). We temporarily rebind
+    # them for the duration of the forward to inject the per-document boundaries, then
+    # restore -- so nothing leaks across modules or forwards.
+    _INJECT = (
+        ("chunk_gated_delta_rule", "cu_seqlens", "_gdn_cu_seqlens"),
+        ("recurrent_gated_delta_rule", "cu_seqlens", "_gdn_cu_seqlens"),
+        ("causal_conv1d_fn", "seq_idx", "_gdn_seq_idx"),
+    )
+
     @functools.wraps(orig)
     def forward(self, *args, **kwargs):
-        # The kernels are instance attributes; rebind them for this forward to inject the
-        # per-document boundaries, then restore (nothing leaks across modules/forwards).
+        cu = getattr(self, "_gdn_cu_seqlens", None)
+        si = getattr(self, "_gdn_seq_idx", None)
+        if cu is None and si is None:
+            return orig(self, *args, **kwargs)
         saved = {}
         for attr, key, ctx_attr in _INJECT:
-            value = getattr(self, ctx_attr, None)
+            value = cu if key == "cu_seqlens" else si
             fn = getattr(self, attr, None)
             if fn is not None and value is not None:
                 saved[attr] = fn
@@ -90,14 +91,12 @@ def _patch_decoder_forward(dl_cls, gdn_cls):
 
     @functools.wraps(orig)
     def forward(self, *args, **kwargs):
-        pos = kwargs.get("position_ids")
-        cu = _cu_seqlens_from_position_ids(pos)
-        si = _seq_idx_from_position_ids(pos)
-        if cu is not None or si is not None:
+        ctx = packed_seq_context(kwargs.get("position_ids"))
+        if ctx is not None:
             for module in self.modules():
                 if isinstance(module, gdn_cls):
-                    module._gdn_cu_seqlens = cu
-                    module._gdn_seq_idx = si
+                    module._gdn_cu_seqlens = ctx.cu_seqlens
+                    module._gdn_seq_idx = ctx.seq_idx
         return orig(self, *args, **kwargs)
 
     forward._gdn_packing = True
@@ -112,7 +111,11 @@ def _find_class(mod, suffix):
 
 
 def apply_gateddeltanet_packing_patch():
-    """Idempotent; patches every GatedDeltaNet hybrid arch present (Qwen3.5/3.6, Qwen3-Next)."""
+    """Reset GatedDeltaNet recurrence + conv state at packed-document boundaries.
+
+    Idempotent; patches every GatedDeltaNet hybrid arch present (Qwen3.5/3.6 MoE,
+    Qwen3-Next, ...). Returns True if anything was patched.
+    """
     patched = False
     for mod_name in ("qwen3_5_moe", "qwen3_next"):
         try:
@@ -121,10 +124,15 @@ def apply_gateddeltanet_packing_patch():
             continue
         gdn_cls = _find_class(mod, "GatedDeltaNet")
         dl_cls = _find_class(mod, "DecoderLayer")
-        if gdn_cls is not None and dl_cls is not None:
-            _patch_gdn_forward(gdn_cls)
-            _patch_decoder_forward(dl_cls, gdn_cls)
-            patched = True
+        if gdn_cls is None or dl_cls is None:
+            continue
+        _patch_gdn_forward(gdn_cls)
+        _patch_decoder_forward(dl_cls, gdn_cls)
+        patched = True
+
     if patched:
-        logger.info("[fsdp] GatedDeltaNet packing fix applied (cu_seqlens/seq_idx per packed doc)")
+        logger.info(
+            "[fsdp] GatedDeltaNet packing fix applied: cu_seqlens/seq_idx reset the "
+            "linear-attn recurrence and causal-conv state per packed document"
+        )
     return patched

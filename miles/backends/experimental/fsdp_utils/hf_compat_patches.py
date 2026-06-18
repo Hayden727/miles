@@ -181,12 +181,6 @@ def _is_gated_deltanet(hf_config) -> bool:
     return (layer_types is not None and "linear_attention" in layer_types) or "qwen3_5" in model_type
 
 
-def _apply_gated_deltanet_packing(hf_config) -> None:
-    from .models.qwen3_5_moe import apply_gateddeltanet_packing_patch
-
-    apply_gateddeltanet_packing_patch()
-
-
 class ModelPatchHook:
     """A config-time HF-compat patch: an ``applies_to`` predicate + an ``apply`` action.
 
@@ -221,13 +215,6 @@ def _has_config(hf_config) -> bool:
 register_model_patch(ModelPatchHook("flash_attn_saux_guard", _always, lambda cfg: apply_flash_attn_saux_guard()))
 register_model_patch(ModelPatchHook("fp8_checkpoint_guard", _has_config, check_fp8_checkpoint))
 register_model_patch(ModelPatchHook("dsa_train_infer_warn", _has_config, check_train_infer_consistency))
-register_model_patch(
-    ModelPatchHook(
-        "gated_deltanet_packing",
-        lambda cfg: _has_config(cfg) and _is_gated_deltanet(cfg),
-        _apply_gated_deltanet_packing,
-    )
-)
 
 
 def apply_hf_compat_patches(hf_config=None) -> None:
@@ -239,3 +226,8 @@ def apply_hf_compat_patches(hf_config=None) -> None:
     for hook in _MODEL_PATCH_HOOKS:
         if hook.applies_to(hf_config):
             hook.apply(hf_config)
+    # Config-lifetime packed-sequence layout patches (GatedDeltaNet, ...) go through the unified
+    # packing registry; new packing archs register a PackingPatch there instead of a ModelPatchHook.
+    from .packing import apply_packing
+
+    apply_packing(None, hf_config, "config")

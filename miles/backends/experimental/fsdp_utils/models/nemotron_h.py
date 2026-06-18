@@ -29,22 +29,9 @@ import functools
 import logging
 import sys
 
+from ..packing.boundaries import packed_seq_context
+
 logger = logging.getLogger(__name__)
-
-
-def _boundaries_from_position_ids(position_ids):
-    import torch
-
-    if position_ids is None or position_ids.dim() != 2 or position_ids.shape[0] != 1:
-        return None, None
-    pos = position_ids.reshape(-1)
-    starts = (pos == 0).nonzero(as_tuple=True)[0]
-    if starts.numel() <= 1:
-        return None, None  # single document -> packing is a no-op
-    total = torch.tensor([pos.numel()], device=pos.device, dtype=starts.dtype)
-    cu_seqlens = torch.cat([starts, total]).to(torch.int32)
-    seq_idx = (torch.cumsum((pos == 0).to(torch.int32), dim=0) - 1).to(torch.int32).unsqueeze(0).contiguous()
-    return cu_seqlens, seq_idx
 
 
 def _inject_seq_idx(fn, seq_idx):
@@ -139,7 +126,9 @@ def _patch_causallm_forward(causallm_cls, mixer_cls, attn_cls):
             position_ids = sig.bind(self, *args, **kwargs).arguments.get("position_ids")
         except TypeError:
             position_ids = kwargs.get("position_ids")
-        cu, si = _boundaries_from_position_ids(position_ids)
+        ctx = packed_seq_context(position_ids)
+        cu = ctx.cu_seqlens if ctx is not None else None
+        si = ctx.seq_idx if ctx is not None else None
         for mod in self.modules():
             if isinstance(mod, mixer_cls):
                 mod._packing_seq_idx = si

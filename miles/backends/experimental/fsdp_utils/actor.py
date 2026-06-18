@@ -124,13 +124,13 @@ class FSDPTrainRayActor(TrainRayActor):
 
         reload_clobbered_checkpoint_params(model, self.args.hf_checkpoint, self.hf_config)
 
-        # NemotronH Mamba2: HF training uses a fully-fused mamba kernel while the sglang rollout uses an
-        # un-fused conv+scan+norm+out_proj chain; the op-order difference inflates the train/rollout
-        # logprob diff (~0.045). Force HF down its own un-fused branch so it matches sglang.
-        if "nemotron_h" in str(getattr(self.hf_config, "model_type", "") or "").lower():
-            from .models.nemotron_h import apply_nemotron_h_sglang_match_patch
+        # Post-load packed-sequence layout patches that need the instantiated model (NemotronH resets
+        # Mamba2 conv+scan via seq_idx on its un-fused branch AND attention via varlen cu_seqlens, both
+        # per packed document). Unified packing registry; no-op for archs that pack natively (glm MLA)
+        # or don't pack (dense Qwen3). New post-load archs register a PackingPatch instead of an if here.
+        from .packing import apply_packing
 
-            apply_nemotron_h_sglang_match_patch(model)
+        apply_packing(model, self.hf_config, "post_load")
 
         model.train()
 
