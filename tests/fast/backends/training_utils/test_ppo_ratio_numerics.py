@@ -2,12 +2,15 @@ import torch
 
 from miles.backends.training_utils.loss_hub.math_utils import compute_approx_kl, compute_policy_loss
 
+compute_approx_kl_eager = compute_approx_kl.__wrapped__
+compute_policy_loss_eager = compute_policy_loss.__wrapped__
+
 
 def test_policy_loss_extreme_log_ratios_with_zero_advantages_stay_finite():
     ppo_kl = torch.tensor([-1000.0, 1000.0, float("nan"), float("inf"), float("-inf")])
     advantages = torch.zeros_like(ppo_kl)
 
-    pg_losses, clipfrac = compute_policy_loss(ppo_kl, advantages, eps_clip=0.2, eps_clip_high=0.2)
+    pg_losses, clipfrac = compute_policy_loss_eager(ppo_kl, advantages, eps_clip=0.2, eps_clip_high=0.2)
 
     assert torch.isfinite(pg_losses).all().item()
     assert torch.isfinite(clipfrac).all().item()
@@ -20,7 +23,12 @@ def test_policy_loss_matches_unclamped_ratio_for_normal_log_ratios():
     eps_clip = 0.2
     eps_clip_high = 0.2
 
-    pg_losses, clipfrac = compute_policy_loss(ppo_kl, advantages, eps_clip=eps_clip, eps_clip_high=eps_clip_high)
+    pg_losses, clipfrac = compute_policy_loss_eager(
+        ppo_kl,
+        advantages,
+        eps_clip=eps_clip,
+        eps_clip_high=eps_clip_high,
+    )
 
     ratio = (-ppo_kl).exp()
     expected_losses1 = -ratio * advantages
@@ -36,7 +44,7 @@ def test_low_var_kl_extreme_log_ratios_stay_finite():
     log_probs = torch.tensor([-1000.0, 1000.0, float("nan"), float("inf"), float("-inf")])
     log_probs_base = torch.zeros_like(log_probs)
 
-    kl = compute_approx_kl(log_probs, log_probs_base, kl_loss_type="low_var_kl")
+    kl = compute_approx_kl_eager(log_probs, log_probs_base, kl_loss_type="low_var_kl")
 
     assert torch.isfinite(kl).all().item()
 
@@ -45,7 +53,7 @@ def test_low_var_kl_matches_unclamped_formula_for_normal_log_ratios():
     log_probs = torch.tensor([-0.1, 0.0, 0.1], dtype=torch.float32)
     log_probs_base = torch.zeros_like(log_probs)
 
-    kl = compute_approx_kl(log_probs, log_probs_base, kl_loss_type="low_var_kl")
+    kl = compute_approx_kl_eager(log_probs, log_probs_base, kl_loss_type="low_var_kl")
 
     log_ratio = -(log_probs - log_probs_base)
     expected_kl = log_ratio.exp() - 1 - log_ratio
