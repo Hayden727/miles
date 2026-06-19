@@ -279,8 +279,10 @@ def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Itera
             yield _compute_fqn(name), param
 
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
-            if "expert_bias" not in name:
+            # Collect all real buffers so gemma4's per-layer/router/vision buffers
+            # (layer_scalar, per_expert_scale, std_bias/scale) are available for the
+            # HF<->Megatron weight conversion; skip only TE serialization state.
+            if "_extra_state" in name:
                 continue
             yield _compute_fqn(name), buffer
 
@@ -348,8 +350,10 @@ def _named_params_and_buffers_global(
 
         # treat expert bias as normal parameters
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
-            if "expert_bias" not in name:
+            # Collect all real buffers so gemma4's per-layer/router/vision buffers
+            # (layer_scalar, per_expert_scale, std_bias/scale) are available for the
+            # HF<->Megatron weight conversion; skip only TE serialization state.
+            if "_extra_state" in name:
                 continue
             # for model without ddp wrap
             if not name.startswith("module.module."):
