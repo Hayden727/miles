@@ -78,18 +78,11 @@ class SessionServer:
         }
 
     def build_proxy_response(self, result: dict) -> Response:
-        """Forward the upstream result to the client verbatim.
-
-        This is a proxy: the chat-completion handler already parses and validates
-        the upstream JSON once for TITO token tracking, so re-parsing and
-        re-serializing it through JSONResponse would only double CPU on large
-        (multi-MB all-token routed-experts) responses. We return the original
-        bytes and let Starlette recompute framing from the body — this also makes
-        non-JSON upstream bodies (e.g. error pages) pass through unchanged.
-        """
-        # Drop wire-level framing headers from upstream so Starlette rebuilds them
-        # from the body we actually send: transfer-encoding is hop-by-hop, and
-        # httpx already decoded the body so content-encoding/length no longer match.
+        """Return the upstream body unchanged. The caller already parsed it once for
+        TITO tracking, so re-serializing here would double CPU on large responses;
+        raw bytes also pass non-JSON bodies (e.g. error pages) through."""
+        # Drop framing headers that no longer match the body we send: transfer-encoding
+        # is hop-by-hop, and httpx already decoded the body so content-length/encoding are stale.
         headers = {
             k: v
             for k, v in result["headers"].items()
