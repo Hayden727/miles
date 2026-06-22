@@ -1,20 +1,24 @@
 """E2E session stress tests.
 
-Contract under test (with split-lock / session.closing):
-- Phase 1 (prepare) and Phase 3 (state update) hold session.lock briefly;
-  Phase 2 (proxy to SGLang) does NOT hold the lock.
-- Concurrent same-session requests can overlap at the backend (Phase 2),
-  but state updates (Phase 3) are serialized; stale-update guard
-  (expected_num_assistant check) ensures only one concurrent writer wins.
-- Different sessions can run in parallel (no global lock).
-- Per-session clients can run turn-by-turn without idle gaps while global load stays parallel.
-- Delete marks session.closing=True, acquires session.lock, then removes.
-  Because the lock is not held during Phase 2, delete can proceed while a
-  chat request is mid-proxy; the chat's Phase 3 will see closing=True and
-  skip the state update gracefully.
-- Chat requests to a closing session get 404 immediately (pre-lock check).
-- Chat requests arriving while delete waits for lock get 404 (double-check after lock).
+Contract under test (per-session in-flight gate):
+- A session admits at most one in-flight chat completion. A second concurrent
+  same-session chat fast-fails 409 ("session already has an in-flight chat
+  completion") at slot-claim time, before the body is read/parsed and before
+  the backend is hit; it never reaches the backend.
+- The in-flight slot is released on every exit path (success, malformed JSON,
+  prepare error, upstream non-200, transport 502, response validation failure,
+  state-update error, client cancel/disconnect), and only by the request that
+  claimed it: a request that got 409/404 does not clear the owner's slot.
+- Different sessions still run in parallel (no global lock); per-session clients
+  can run turn-by-turn without idle gaps while global load stays parallel.
+- Delete marks session.closing=True, acquires session.lock, then removes. The
+  lock is not held during the proxy, so delete can proceed while a chat is
+  mid-proxy; that chat's commit sees closing=True and skips the state update.
+- Chat to a closing session gets 404 immediately, and closing (404) has
+  priority over busy (409).
 - Concurrent deletes on the same session: second delete gets 404.
+- The upstream body is passed through faithfully; stale framing headers
+  (content-length / transfer-encoding / content-encoding) are stripped.
 """
 
 from __future__ import annotations
@@ -55,9 +59,37 @@ def _patch_mock_chat_response():
     return patch.object(MockSGLangServer, "_compute_chat_completions_response", new=patched_chat_response)
 
 
+def _patch_mock_chat_response_bad_first():
+    """Like `_patch_mock_chat_response`, but the FIRST chat response is missing
+    `meta_info` so the session server raises UpstreamResponseError (502). The
+    second and later responses are valid, so a retry after the failure can 200.
+    """
+    original_chat_response = MockSGLangServer._compute_chat_completions_response
+    state = {"calls": 0}
+
+    def patched_chat_response(self, payload: dict) -> dict:
+        response = original_chat_response(self, payload)
+        choice = response["choices"][0]
+        logprobs_content = choice["logprobs"]["content"]
+        output_token_logprobs = [
+            (item["logprob"], self.tokenizer.convert_tokens_to_ids(item["token"])) for item in logprobs_content
+        ]
+        choice["meta_info"] = {
+            "output_token_logprobs": output_token_logprobs,
+            "completion_tokens": len(output_token_logprobs),
+        }
+        state["calls"] += 1
+        if state["calls"] == 1:
+            # Strip meta_info from the first response only -> 502 on first chat.
+            choice.pop("meta_info", None)
+        return response
+
+    return patch.object(MockSGLangServer, "_compute_chat_completions_response", new=patched_chat_response)
+
+
 @contextmanager
-def _router_env(process_fn, *, latency: float = 0.0):
-    with _patch_mock_chat_response():
+def _router_env(process_fn, *, latency: float = 0.0, response_patch=None):
+    with (response_patch or _patch_mock_chat_response)():
         with with_mock_server(model_name=HF_CHECKPOINT, process_fn=process_fn, latency=latency) as backend:
             args = SimpleNamespace(
                 miles_router_timeout=30,
@@ -93,46 +125,80 @@ def _chat(url: str, session_id: str, payload: dict, timeout: float = 20.0) -> re
     )
 
 
-class TestSessionConcurrencyContracts:
-    def test_same_session_concurrent_requests_reach_backend(self):
-        """With the split-lock, same-session requests CAN overlap at the backend.
+def _wait_for_backend_requests(backend, count: int, timeout: float = 5.0) -> None:
+    """Block until the backend has logged exactly `count` requests.
 
-        Phase 2 (proxy) runs without the lock, so concurrent requests are not
-        serialized at the backend level.  Phase 3 state updates are still
-        serialized; the stale-update guard ensures only one writer wins per
-        generation, so no state corruption occurs.
+    Using a backend-arrival barrier instead of sleeping makes the "request is
+    parked in proxy" precondition deterministic: once the entry is logged the
+    owner has claimed the in-flight slot and is sitting in the latency window.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if len(backend.request_log) == count:
+            return
+        time.sleep(0.005)
+    raise AssertionError(f"backend did not reach {count} requests in {timeout}s (saw {len(backend.request_log)})")
+
+
+class TestSessionConcurrencyContracts:
+    def test_same_session_second_chat_returns_409(self):
+        """A session admits one in-flight chat; concurrents fast-fail 409.
+
+        Park chat A in proxy (held by backend latency) and confirm via the
+        arrival barrier that A holds the slot. Contenders B/C/D on the same
+        session must each get 409 without ever reaching the backend, and they
+        must not release A's slot. After A finishes 200, the slot is free and a
+        fresh same-session chat succeeds.
         """
+
+        # Latency comfortably larger than the time to fire three contenders.
+        latency = 0.5
 
         def process_fn(prompt: str) -> ProcessResult:
             return ProcessResult(text="concurrent-ok", finish_reason="stop")
 
-        with _router_env(process_fn, latency=0.2) as env:
+        with _router_env(process_fn, latency=latency) as env:
             session_id = _create_session(env.url)
-
-            # Warm up one assistant checkpoint so repeated identical retry payloads are valid.
-            warmup_payload = {"messages": [{"role": "user", "content": "warmup"}]}
-            warmup_resp = _chat(env.url, session_id, warmup_payload)
-            assert warmup_resp.status_code == 200
-            assistant = warmup_resp.json()["choices"][0]["message"]
-
-            retry_payload = {
-                "messages": [
-                    {"role": "user", "content": "warmup"},
-                    assistant,
-                    {"role": "system", "content": "retry-from-assistant-checkpoint"},
-                ]
-            }
+            payload = {"messages": [{"role": "user", "content": "park-in-proxy"}]}
 
             env.backend.reset_stats()
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = [pool.submit(_chat, env.url, session_id, retry_payload) for _ in range(4)]
-                responses = [f.result(timeout=30.0) for f in futures]
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                # Fire A and wait until it is parked in proxy holding the slot.
+                chat_a = pool.submit(_chat, env.url, session_id, payload, 30.0)
+                _wait_for_backend_requests(env.backend, 1)
 
-            # All requests should succeed (200) — no 500s.
-            assert all(resp.status_code == 200 for resp in responses)
-            assert len(env.backend.request_log) == 4
-            # With split-lock, concurrent backend access is expected (not == 1).
-            assert env.backend.max_concurrent >= 1
+                # Contenders on the SAME session while A is parked -> 409 each.
+                contender_codes = []
+                for _ in range(3):
+                    resp = _chat(env.url, session_id, payload, timeout=10.0)
+                    contender_codes.append(resp.status_code)
+                    assert resp.status_code == 409, f"contender should be 409, got {resp.status_code}"
+                    assert resp.json()["error"] == "session already has an in-flight chat completion"
+
+                # Contenders never reached the backend: still exactly A's request.
+                assert len(env.backend.request_log) == 1
+
+                # A finishes 200; a 409 contender did NOT clear A's slot.
+                chat_a_resp = chat_a.result(timeout=30.0)
+
+            assert chat_a_resp.status_code == 200
+            assert contender_codes == [409, 409, 409]
+            assert len(env.backend.request_log) == 1
+
+            # Slot was released on A's success: a fresh same-session chat works.
+            # The follow-up must be an append-only continuation of A's committed
+            # trajectory, so build it from A's assistant message.
+            assistant = chat_a_resp.json()["choices"][0]["message"]
+            follow_up = {
+                "messages": [
+                    {"role": "user", "content": "park-in-proxy"},
+                    assistant,
+                    {"role": "system", "content": "continue-after-A"},
+                ]
+            }
+            after = _chat(env.url, session_id, follow_up, timeout=20.0)
+            assert after.status_code == 200
+            assert len(env.backend.request_log) == 2
 
     def test_different_sessions_can_run_in_parallel(self):
         def process_fn(prompt: str) -> ProcessResult:
@@ -192,10 +258,11 @@ class TestSessionConcurrencyContracts:
             assert env.backend.max_concurrent >= 4
 
     def test_delete_can_proceed_while_chat_is_mid_proxy(self):
-        """With split-lock, delete can acquire the lock while chat is in Phase 2.
+        """Delete can acquire the lock while a chat is mid-proxy.
 
-        The inflight chat's Phase 3 sees session.closing=True and skips
-        state update gracefully.  Both chat and delete complete without error.
+        The lock is not held during the proxy, so delete proceeds; the in-flight
+        chat's commit step sees session.closing=True and skips the state update.
+        Both chat and delete complete without error.
         """
 
         def process_fn(prompt: str) -> ProcessResult:
@@ -235,10 +302,10 @@ class TestClosingRaceConditions:
         """Chat requests arriving after delete sets closing=True get 404.
 
         Timeline:
-        1. Chat A starts, acquires lock (Phase 1), releases it, proxying (Phase 2)
-        2. Delete arrives, sets session.closing=True, acquires lock, removes session
-        3. Chat B arrives, sees session.closing=True, returns 404 immediately
-        4. Chat A's Phase 3 sees closing=True, skips state update, returns 200
+        1. Chat A starts, claims the in-flight slot, and is proxying to backend.
+        2. Delete arrives, sets session.closing=True, acquires lock, removes session.
+        3. Chat B arrives, sees session.closing=True, returns 404 immediately.
+        4. Chat A's commit sees closing=True, skips the state update, returns 200.
         """
 
         def process_fn(prompt: str) -> ProcessResult:
@@ -348,11 +415,13 @@ class TestClosingRaceConditions:
             get_resp = requests.get(f"{env.url}/sessions/{session_id}", timeout=5.0)
             assert get_resp.status_code == 404
 
-    def test_multiple_chats_queued_then_delete(self):
-        """Multiple chat requests queued behind session.lock, then delete.
+    def test_concurrent_chats_then_delete(self):
+        """Concurrent same-session chats do not queue under the gate.
 
-        After delete marks closing=True, queued chats that acquire the lock
-        should check closing and return 404.
+        One chat parks in proxy holding the slot; a couple more same-session
+        chats fired concurrently get 409 (gate, before the backend). A delete
+        then returns 204 and the parked chat returns 200 (commit skips the
+        state update on closing). No 500s; codes are a subset of {200,409,404}.
         """
 
         def process_fn(prompt: str) -> ProcessResult:
@@ -362,35 +431,33 @@ class TestClosingRaceConditions:
             session_id = _create_session(env.url)
             payload = {"messages": [{"role": "user", "content": "queued"}]}
 
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                # Fire 3 chats (first holds lock, others queue)
-                chat_futures = [pool.submit(_chat, env.url, session_id, payload, 30.0) for _ in range(3)]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                # Park the owner chat in proxy holding the in-flight slot.
+                owner = pool.submit(_chat, env.url, session_id, payload, 30.0)
+                _wait_for_backend_requests(env.backend, 1)
 
-                # Wait for first to reach backend
-                deadline = time.time() + 5.0
-                while time.time() < deadline:
-                    if env.backend.request_log:
-                        break
-                    time.sleep(0.01)
+                # Concurrent same-session chats hit the gate -> 409.
+                contender_codes = [_chat(env.url, session_id, payload, timeout=10.0).status_code for _ in range(2)]
 
-                # Now delete - sets closing, waits for first chat to finish
+                # Delete the session while the owner is still parked.
                 delete_future = pool.submit(
                     requests.delete,
                     f"{env.url}/sessions/{session_id}",
                     timeout=30.0,
                 )
 
-                results = [f.result(timeout=30.0) for f in chat_futures]
+                owner_resp = owner.result(timeout=30.0)
                 delete_resp = delete_future.result(timeout=30.0)
 
             assert delete_resp.status_code == 204
+            assert owner_resp.status_code == 200
+            assert contender_codes == [409, 409]
 
-            # At least one chat must succeed (the one holding the lock when
-            # delete arrived).  Others may get 200 (acquired lock before
-            # closing) or 404 (saw closing=True).  No 500s allowed.
-            status_codes = [r.status_code for r in results]
-            assert all(c in (200, 404) for c in status_codes), f"Unexpected status codes: {status_codes}"
-            assert 200 in status_codes, f"Expected at least one 200, got {status_codes}"
+            # No 500s; every chat code is in the allowed set, and exactly one
+            # chat (the owner) reached the backend.
+            all_chat_codes = [owner_resp.status_code, *contender_codes]
+            assert all(c in (200, 409, 404) for c in all_chat_codes), f"Unexpected status codes: {all_chat_codes}"
+            assert len(env.backend.request_log) == 1
 
     def test_rapid_create_chat_delete_cycles(self):
         """Rapidly create, chat, and delete sessions to stress the lifecycle.
@@ -420,3 +487,84 @@ class TestClosingRaceConditions:
                 results = [f.result(timeout=60.0) for f in futures]
 
             assert all(results)
+
+
+class TestSlotReleaseAfterError:
+    """The in-flight slot is freed on failing exit paths: a fresh legal chat on
+    the same session after a failure must succeed (200, not 409).
+    """
+
+    def test_slot_released_after_malformed_request_json(self):
+        """Malformed JSON body errors (500-class) before the backend; the slot
+        is released so a subsequent normal chat on the same session returns 200.
+        """
+
+        def process_fn(prompt: str) -> ProcessResult:
+            return ProcessResult(text="ok", finish_reason="stop")
+
+        with _router_env(process_fn) as env:
+            session_id = _create_session(env.url)
+
+            bad = requests.post(
+                f"{env.url}/sessions/{session_id}/v1/chat/completions",
+                data="{not json",
+                headers={"content-type": "application/json"},
+                timeout=10.0,
+            )
+            assert bad.status_code >= 500
+            # The malformed body never reached the backend.
+            assert len(env.backend.request_log) == 0
+
+            good = _chat(env.url, session_id, {"messages": [{"role": "user", "content": "hi"}]}, timeout=20.0)
+            assert good.status_code == 200
+            assert len(env.backend.request_log) == 1
+
+    def test_slot_released_after_response_validation_failure(self):
+        """An upstream response missing meta_info raises UpstreamResponseError
+        (502); the slot is released so a subsequent normal chat returns 200.
+        """
+
+        def process_fn(prompt: str) -> ProcessResult:
+            return ProcessResult(text="ok", finish_reason="stop")
+
+        with _router_env(process_fn, response_patch=_patch_mock_chat_response_bad_first) as env:
+            session_id = _create_session(env.url)
+
+            bad = _chat(env.url, session_id, {"messages": [{"role": "user", "content": "hi"}]}, timeout=20.0)
+            assert bad.status_code == 502
+            assert len(env.backend.request_log) == 1
+
+            good = _chat(env.url, session_id, {"messages": [{"role": "user", "content": "hi again"}]}, timeout=20.0)
+            assert good.status_code == 200
+            assert len(env.backend.request_log) == 2
+
+
+class TestPassthroughFidelity:
+    """A successful chat response is passed through faithfully and stale
+    framing headers from upstream are not copied to the client.
+    """
+
+    def test_successful_response_body_and_headers_passthrough(self):
+        def process_fn(prompt: str) -> ProcessResult:
+            return ProcessResult(text="passthrough-ok", finish_reason="stop")
+
+        with _router_env(process_fn) as env:
+            session_id = _create_session(env.url)
+            resp = _chat(env.url, session_id, {"messages": [{"role": "user", "content": "hi"}]}, timeout=20.0)
+            assert resp.status_code == 200
+
+            # Body matches the upstream mock shape (id/object/choices content)
+            # passed through unchanged, including the meta_info the mock adds.
+            client_body = resp.json()
+            assert client_body["object"] == "chat.completion"
+            assert client_body["id"].startswith("chatcmpl-")
+            assert client_body["choices"][0]["message"]["content"] == "passthrough-ok"
+            assert "meta_info" in client_body["choices"][0]
+
+            # Framing headers copied from upstream must have been stripped; the
+            # body is intact (decodable JSON), so requests itself did not need
+            # transfer/content-encoding framing from upstream.
+            lowered = {k.lower() for k in resp.headers.keys()}
+            assert "transfer-encoding" not in lowered
+            assert "content-encoding" not in lowered
+            assert resp.headers.get("content-type", "").startswith("application/json")

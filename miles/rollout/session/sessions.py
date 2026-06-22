@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -8,7 +9,9 @@ from starlette.responses import Response
 
 from miles.rollout.session.linear_trajectory import SessionRegistry
 from miles.rollout.session.session_errors import (
+    SessionBusyError,
     SessionError,
+    SessionInvariantError,
     SessionNotFoundError,
     TokenizationError,
     UpstreamResponseError,
@@ -18,6 +21,46 @@ from miles.utils.chat_template_utils import get_tito_tokenizer
 from miles.utils.processing_utils import load_tokenizer
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_request_body(body: bytes) -> dict:
+    return json.loads(body) if body else {}
+
+
+def _dump_request_body(request_body: dict) -> bytes:
+    return json.dumps(request_body).encode()
+
+
+def _parse_and_validate_response(response_body: bytes) -> tuple[dict, dict, list[int]]:
+    """Parse + validate a successful chat completion response off the event loop.
+
+    Returns (full_response, assistant_message, completion_token_ids). Raises
+    UpstreamResponseError on malformed meta_info / content / token-length mismatch.
+    Touches no session state.
+    """
+    response = json.loads(response_body)
+    choice = response.get("choices", [{}])[0]
+    meta_info = choice.get("meta_info")
+    if not isinstance(meta_info, dict) or "output_token_logprobs" not in meta_info:
+        raise UpstreamResponseError("meta_info and output_token_logprobs must be in choice (requires logprobs=True)")
+    assistant_message = choice.get("message", {})
+    if assistant_message.get("content") is None:
+        raise UpstreamResponseError(
+            "assistant message content is None, when tool call parser failed SGLang should still return "
+            "an empty content rather than None. Please check your modified SGLang version."
+        )
+    output_token_logprobs = meta_info["output_token_logprobs"]
+    completion_tokens = meta_info["completion_tokens"]
+    actual_output_logprobs_len = len(output_token_logprobs)
+    if actual_output_logprobs_len != completion_tokens:
+        raise UpstreamResponseError(
+            "invalid chat completion response: "
+            f"len(output_token_logprobs)={actual_output_logprobs_len} "
+            f"!= completion_tokens={completion_tokens}. "
+            f"Please check whether you use the correct SGLang branch which has fix the tokenizer batch decode issue."
+        )
+    completion_token_ids = [t[1] for t in output_token_logprobs]
+    return response, assistant_message, completion_token_ids
 
 
 def setup_session_routes(app, backend, args):
@@ -47,24 +90,6 @@ def setup_session_routes(app, backend, args):
         if session_server_instance_id is not None:
             body["session_server_instance_id"] = session_server_instance_id
         return body
-
-    # --- DEBUG: track in-flight chat_completions ---
-    _inflight_chat = {"count": 0}
-
-    @app.middleware("http")
-    async def debug_request_logger(request: Request, call_next):
-        client = request.client
-        client_info = f"{client.host}:{client.port}" if client else "unknown"
-        logger.info(
-            f"[session-server] REQUEST ARRIVED: {request.method} {request.url.path} from={client_info} inflight_chat={_inflight_chat['count']}"
-        )
-        t0 = time.time()
-        response = await call_next(request)
-        elapsed = time.time() - t0
-        logger.info(
-            f"[session-server] REQUEST DONE: {request.method} {request.url.path} status={response.status_code} elapsed={elapsed:.3f}s from={client_info}"
-        )
-        return response
 
     @app.exception_handler(SessionError)
     async def session_error_handler(request: Request, exc: SessionError):
@@ -113,115 +138,80 @@ def setup_session_routes(app, backend, args):
 
     @app.post("/sessions/{session_id}/v1/chat/completions")
     async def chat_completions(request: Request, session_id: str):
-        """Proxy a chat completion through SGLang with TITO token tracking.
-
-        Flow: prepare pretokenized input_ids (lock held briefly) → inject
-        SGLang flags → proxy to backend (NO lock) → validate response →
-        update trajectory checkpoint (lock held briefly) → append session record.
-
-        The lock is NOT held during the slow proxy call to avoid blocking
-        DELETE/other operations when the agent disconnects mid-request.
+        """One in-flight chat per session; a second concurrent same-session chat
+        fast-fails 409 without entering the backend. State mutation stays on the
+        event loop under session.lock; stateless CPU work is offloaded.
         """
-        _inflight_chat["count"] += 1
-        try:
-            session = registry.get_session(session_id)
+        loop = asyncio.get_running_loop()
+        session = registry.get_session(session_id)
+
+        claimed = False
+        # claim the single in-flight slot under a brief lock; closing (404) beats busy (409)
+        async with session.lock:
             if session.closing:
                 raise SessionNotFoundError(f"session not found: session_id={session_id}")
+            if session.chat_inflight:
+                raise SessionBusyError("session already has an in-flight chat completion")
+            session.chat_inflight = True
+            claimed = True
+        try:
+            body = await request.body()
+            request_body = await loop.run_in_executor(backend.cpu_executor, _parse_request_body, body)
 
-            # --- Phase 1: prepare request (lock held briefly) ---
+            # TITO token tracking requires Miles-owned input_ids plus SGLang
+            # output-token metadata:
+            #   logprobs=True     → populates meta_info.output_token_logprobs
+            #   return_meta_info  → wraps the above in choice.meta_info
+            # Both flags are hardcoded (not set default) to prevent agent-side
+            # overrides from breaking the token accumulation invariants.
+            request_body["logprobs"] = True
+            request_body["return_meta_info"] = True
+            if getattr(args, "use_rollout_routing_replay", False):
+                request_body["return_routed_experts"] = True
+            if getattr(args, "use_rollout_indexer_replay", False):
+                request_body["return_indexer_topk"] = True
+            # Must be False so stop-token text is trimmed from assistant
+            # message content; token IDs are still taken from logprobs below.
+            request_body["no_stop_trim"] = False
+            request_messages = request_body.get("messages", [])
+
+            # prepare pretokenized input under the lock (mutates trajectory state)
             async with session.lock:
-                # Double-check: session may have been marked closing while waiting for lock.
                 if session.closing:
                     raise SessionNotFoundError(f"session not found: session_id={session_id}")
-
-                body = await request.body()
-                request_body = json.loads(body) if body else {}
-
-                # TITO token tracking requires Miles-owned input_ids plus SGLang
-                # output-token metadata:
-                #   logprobs=True     → populates meta_info.output_token_logprobs
-                #   return_meta_info  → wraps the above in choice.meta_info
-                # Both flags are hardcoded (not set default) to prevent agent-side
-                # overrides from breaking the token accumulation invariants.
-                request_body["logprobs"] = True
-                request_body["return_meta_info"] = True
-                if getattr(args, "use_rollout_routing_replay", False):
-                    request_body["return_routed_experts"] = True
-                if getattr(args, "use_rollout_indexer_replay", False):
-                    request_body["return_indexer_topk"] = True
-                # Must be False so stop-token text is trimmed from assistant
-                # message content; token IDs are still taken from logprobs below.
-                request_body["no_stop_trim"] = False
-
-                request_messages = request_body.get("messages", [])
                 prompt_token_ids = session.prepare_pretokenized(
                     request_messages,
                     tools=request_body.get("tools"),
                     tito_tokenizer=registry.tito_tokenizer,
                 )
                 request_body["input_ids"] = prompt_token_ids
-                logger.debug(
-                    "Using TITO input_ids: %d tokens",
-                    len(prompt_token_ids),
-                )
-
-                body = json.dumps(request_body).encode()
                 expected_num_assistant = session.num_assistant
-            # --- lock released here ---
+            logger.debug("Using TITO input_ids: %d tokens", len(prompt_token_ids))
 
-            # --- Phase 2: proxy to SGLang (NO lock held) ---
-            result = await backend.do_proxy(request, "v1/chat/completions", body=body)
-
-            # If SGLang returned a non-200 error (e.g. 400 for context too long),
-            # pass it through to the agent without recording — the agent can retry
-            # or handle the error.
+            encoded_body = await loop.run_in_executor(backend.cpu_executor, _dump_request_body, request_body)
+            result = await backend.do_proxy(request, "v1/chat/completions", body=encoded_body)
+            # Non-200 (e.g. 400 for context too long) passes through unrecorded;
+            # the agent can retry or handle the error.
             if result["status_code"] != 200:
                 return backend.build_proxy_response(result)
 
-            response = json.loads(result["response_body"])
+            response, assistant_message, completion_token_ids = await loop.run_in_executor(
+                backend.cpu_executor, _parse_and_validate_response, result["response_body"]
+            )
 
-            choice = response.get("choices", [{}])[0]
-
-            meta_info = choice.get("meta_info")
-            if not isinstance(meta_info, dict) or "output_token_logprobs" not in meta_info:
-                raise UpstreamResponseError(
-                    "meta_info and output_token_logprobs must be in choice (requires logprobs=True)"
-                )
-            assistant_message = choice.get("message", {})
-            if assistant_message.get("content") is None:
-                raise UpstreamResponseError(
-                    "assistant message content is None, when tool call parser failed SGLang should still return "
-                    "an empty content rather than None. Please check your modified SGLang version."
-                )
-
-            output_token_logprobs = meta_info["output_token_logprobs"]
-            completion_tokens = meta_info["completion_tokens"]
-
-            actual_output_logprobs_len = len(output_token_logprobs)
-            if actual_output_logprobs_len != completion_tokens:
-                raise UpstreamResponseError(
-                    "invalid chat completion response: "
-                    f"len(output_token_logprobs)={actual_output_logprobs_len} "
-                    f"!= completion_tokens={completion_tokens}. "
-                    f"Please check whether you use the correct SGLang branch which has fix the tokenizer batch decode issue."
-                )
-
-            completion_token_ids = [t[1] for t in output_token_logprobs]
-
-            # --- Phase 3: update state (lock held briefly) ---
+            # commit state under the lock
             async with session.lock:
                 if session.closing:
                     logger.warning(f"Session {session_id} closed during proxy, skipping state update")
                     return backend.build_proxy_response(result)
-
                 if session.num_assistant != expected_num_assistant:
-                    logger.warning(
-                        f"Session {session_id} state changed during proxy "
-                        f"(expected num_assistant={expected_num_assistant}, "
-                        f"got {session.num_assistant}), skipping state update"
+                    logger.error(
+                        f"Session {session_id} invariant violation: num_assistant={session.num_assistant} "
+                        f"!= expected={expected_num_assistant} under the in-flight gate; this should be unreachable"
                     )
-                    return backend.build_proxy_response(result)
-
+                    raise SessionInvariantError(
+                        f"session state changed under the in-flight gate (session_id={session_id})"
+                    )
                 session.update_pretokenized_state(
                     request_messages,
                     assistant_message,
@@ -229,7 +219,6 @@ def setup_session_routes(app, backend, args):
                     completion_token_ids=completion_token_ids,
                     max_trim_tokens=registry.tito_tokenizer.max_trim_tokens,
                 )
-
                 record = SessionRecord(
                     timestamp=time.time(),
                     method=request.method,
@@ -239,11 +228,12 @@ def setup_session_routes(app, backend, args):
                     response=response,
                 )
                 session.append_record(record)
-            # --- lock released here ---
-
             return backend.build_proxy_response(result)
         finally:
-            _inflight_chat["count"] -= 1
+            if claimed:
+                # single-threaded event loop: a plain write is atomic; no other coroutine
+                # mutates this session's flag without the lock, and finally runs on cancellation.
+                session.chat_inflight = False
 
     @app.api_route("/sessions/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def session_proxy(request: Request, session_id: str, path: str):
