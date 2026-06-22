@@ -103,7 +103,7 @@ def reconfigure_indep_dp_group(
     )
 
 
-def _allreduce_grads_and_losses_across_replicas(
+def allreduce_grads_and_losses_across_replicas(
     args, model: Sequence["DDP"], parallel_state: ParallelState, losses_reduced: list
 ) -> tuple[bool, dict[str, float]]:
     assert not args.calculate_per_token_loss, "calculate_per_token_loss is not supported with indep_dp yet"

@@ -24,7 +24,7 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from miles.backends.megatron_utils.indep_dp import _allreduce_grads_and_losses_across_replicas
+from miles.backends.megatron_utils.indep_dp import allreduce_grads_and_losses_across_replicas
 from miles.backends.megatron_utils.local_weight_checksum import dump_local_weight_checksums
 from miles.backends.megatron_utils.types import TrainStepOutcome
 from miles.utils.dumper_utils import DumperMegatronUtil, DumperPhase
@@ -508,7 +508,7 @@ def train_one_step(
         if ft_actor_executor is not None:
             ft_actor_executor.maybe_crash(rollout_id=rollout_id, attempt=attempt)
 
-        ok, indep_dp_loss_reduced = _allreduce_grads_and_losses_across_replicas(
+        ok, indep_dp_loss_reduced = allreduce_grads_and_losses_across_replicas(
             args, model, parallel_state, losses_reduced=losses_reduced
         )
         if not ok:
