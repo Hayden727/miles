@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -6,7 +7,6 @@ import pytest
 
 from miles.utils import dumper_utils
 from miles.utils.dumper_utils import DumperMegatronUtil, DumperPhase
-import logging
 
 
 class TestWrapForwardStepWithStepping:

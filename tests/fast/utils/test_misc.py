@@ -1,10 +1,9 @@
+import logging
 import os
 
 import pytest
 
-from miles.utils.misc import FunctionRegistry, function_registry, load_function
-import logging
-from miles.utils.misc import filter_keys
+from miles.utils.misc import FunctionRegistry, filter_keys, function_registry, load_function
 
 
 def _fn_a():

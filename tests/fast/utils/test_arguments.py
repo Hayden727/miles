@@ -1,14 +1,13 @@
 import argparse
+import logging
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from miles.utils.arguments import _maybe_apply_dumper_overrides, get_miles_extra_args_provider
+from miles.utils.arguments import _maybe_apply_dumper_overrides, _resolve_ft_components, get_miles_extra_args_provider
 from miles.utils.misc import function_registry
-import logging
-from miles.utils.arguments import _resolve_ft_components
 
 PATH_ARGS = ["--rollout-function-path", "--custom-generate-function-path"]
 REQUIRED_ARGS = ["--rollout-batch-size", "64"]
@@ -162,7 +161,9 @@ class TestResolveFtComponents:
             result = _resolve_ft_components(args)
 
         assert result == []
-        assert any("--ft-components is ignored without --use-fault-tolerance" in record.message for record in caplog.records)
+        assert any(
+            "--ft-components is ignored without --use-fault-tolerance" in record.message for record in caplog.records
+        )
 
     def test_enabled_with_no_components_returns_default(self) -> None:
         """use_fault_tolerance on with no ft_components falls back to the default ['rollout']."""

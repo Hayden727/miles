@@ -5,11 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from miles.utils.event_logger.logger import EventLogger, get_event_logger, set_event_logger
-from miles.utils.event_logger.models import WitnessAllocateIdEvent
+from miles.utils.event_logger.logger import EventLogger, event_logger_context, get_event_logger, set_event_logger
+from miles.utils.event_logger.models import MetricEvent, WitnessAllocateIdEvent
 from miles.utils.process_identity import MainProcessIdentity, TrainProcessIdentity
-from miles.utils.event_logger.logger import event_logger_context
-from miles.utils.event_logger.models import MetricEvent
 
 _TEST_SOURCE = MainProcessIdentity()
 

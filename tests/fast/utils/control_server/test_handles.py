@@ -4,12 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from miles.utils.control_server.handles import _ActorCellHandle, _RolloutCellHandle
+from miles.ray.train.group import RayTrainGroup
+from miles.utils.control_server.handles import _ActorCellHandle, _CellHandle, _RolloutCellHandle
+from miles.utils.test_utils.fault_injector import FailureMode
 
 from .conftest import MockRayTrainCell, MockRolloutManager, make_mock_group
-from miles.ray.train.group import RayTrainGroup
-from miles.utils.control_server.handles import _CellHandle
-from miles.utils.test_utils.fault_injector import FailureMode
 
 
 class TestActorCellHandle:

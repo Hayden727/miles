@@ -1,10 +1,11 @@
-import pytest
-import ray
-
-from tests.fast.ray.train.conftest import make_alive_cell, make_cell, make_indep_dp_info
 import asyncio
 import logging
 from types import SimpleNamespace
+
+import pytest
+import ray
+from tests.fast.ray.train.conftest import make_alive_cell, make_cell, make_indep_dp_info
+
 from miles.ray.train import cell as cell_module
 
 pytestmark = pytest.mark.asyncio
@@ -396,7 +397,7 @@ class _FakeReadyMethod:
 def _make_fake_handle(coro_factories):
     ready = _FakeReadyMethod(coro_factories)
     handle = SimpleNamespace()
-    setattr(handle, "__ray_ready__", ready)
+    handle.__ray_ready__ = ready
     return handle, ready
 
 
@@ -433,9 +434,7 @@ class TestConfirmActorDead:
             slept.append(seconds)
 
         monkeypatch.setattr(cell_module.asyncio, "sleep", _noop_sleep)
-        monkeypatch.setattr(
-            cell_module, "time", SimpleNamespace(monotonic=_make_monotonic([0.0, 1.0]))
-        )
+        monkeypatch.setattr(cell_module, "time", SimpleNamespace(monotonic=_make_monotonic([0.0, 1.0])))
 
         handle, ready = _make_fake_handle(
             [
@@ -451,13 +450,12 @@ class TestConfirmActorDead:
 
     async def test_deadline_reached_returns_and_logs_error(self, monkeypatch, caplog):
         """When the timeout deadline is exceeded after a hung probe, it returns and logs an ERROR."""
+
         async def _noop_sleep(seconds):
             return None
 
         monkeypatch.setattr(cell_module.asyncio, "sleep", _noop_sleep)
-        monkeypatch.setattr(
-            cell_module, "time", SimpleNamespace(monotonic=_make_monotonic([0.0, 200.0]))
-        )
+        monkeypatch.setattr(cell_module, "time", SimpleNamespace(monotonic=_make_monotonic([0.0, 200.0])))
 
         handle, ready = _make_fake_handle([_raise_factory(asyncio.TimeoutError())])
 

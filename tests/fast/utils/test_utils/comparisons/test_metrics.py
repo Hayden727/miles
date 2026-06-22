@@ -11,7 +11,9 @@ _FIXED_TS = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _FIXED_SOURCE = MainProcessIdentity()
 
 
-def _metric_event(*, rollout_id: int | None, attempt: int | None, metrics: dict[str, Any] | None = None) -> MetricEvent:
+def _metric_event(
+    *, rollout_id: int | None, attempt: int | None, metrics: dict[str, Any] | None = None
+) -> MetricEvent:
     return MetricEvent(
         timestamp=_FIXED_TS,
         source=_FIXED_SOURCE,

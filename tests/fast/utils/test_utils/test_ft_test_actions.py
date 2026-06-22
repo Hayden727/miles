@@ -4,12 +4,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from miles.utils.test_utils.ft_test_actions import (
-    FTTestAction,
-    _ACTOR_ACTIONS,
-    _GROUP_ACTIONS,
-    _load_actions,
-)
+from miles.utils.test_utils.ft_test_actions import _ACTOR_ACTIONS, _GROUP_ACTIONS, FTTestAction, _load_actions
 
 
 def _args(ci_ft_test_actions: object) -> SimpleNamespace:
@@ -92,10 +87,7 @@ def test_resolve_cell_index_keeps_explicit_index() -> None:
     assert action.resolve_cell_index(num_cells=4) == 1
 
 
-from miles.utils.test_utils.ft_test_actions import (
-    FTTestAction,
-    FTTestActionGroupExecutor,
-)
+from miles.utils.test_utils.ft_test_actions import FTTestActionGroupExecutor
 
 
 class FakeGroup:
