@@ -141,4 +141,3 @@ def test_recompute_logprobs_via_prefill_flag_is_parsed():
     args = parser.parse_args(["--recompute-logprobs-via-prefill"] + REQUIRED_ARGS)
 
     assert args.recompute_logprobs_via_prefill is True
-

@@ -13,7 +13,7 @@ from miles.utils.chat_template_utils.tito_tokenizer import TITOTokenizerType
 from miles.utils.environ import enable_experimental_rollout_refactor
 from miles.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from miles.utils.hf_config import is_dsa, load_hf_config
-from miles.utils.logging_utils import configure_logger_raw
+from miles.utils.logging_utils import configure_logger
 from miles.utils.misc import load_function
 
 logger = logging.getLogger(__name__)
@@ -33,8 +33,6 @@ def reset_arg(parser, name, **kwargs):
             break
     else:
         parser.add_argument(name, **kwargs)
-
-
 
 
 def get_miles_extra_args_provider(add_custom_arguments=None):
@@ -588,7 +586,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 "--use-fault-tolerance",
                 action="store_true",
                 default=False,
-                help="Enable fault tolerance. Use --ft-components to select which components.",
+                help="Whether to enable the fault tolerance function during rollout.",
             )
             parser.add_argument(
                 "--rollout-health-check-interval",
@@ -1879,7 +1877,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
 
 def parse_args(add_custom_arguments=None):
     # Users may call `parse_args` very early, thus we ensure logger is configured here
-    configure_logger_raw("main")
+    configure_logger()
 
     add_miles_arguments = get_miles_extra_args_provider(add_custom_arguments)
 
@@ -1900,7 +1898,6 @@ def parse_args(add_custom_arguments=None):
                 args.indexer_rope_interleave = bool(getattr(hf_config, "indexer_rope_interleave", False))
                 logger.info(f"Setting indexer_rope_interleave: {args.indexer_rope_interleave} into args")
 
-        # TODO: unify this .rank and .world_size w/ indep_dp logics
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
@@ -1908,7 +1905,6 @@ def parse_args(add_custom_arguments=None):
         from miles.backends.experimental.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_miles_arguments)
-        # TODO: unify this .rank and .world_size w/ indep_dp logics
         args.rank = 0  # Primary process rank for wandb initialization
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
@@ -1997,8 +1993,6 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
         args.eval_prompt_data = None
 
     return eval_datasets
-
-
 
 
 def miles_validate_args(args):
