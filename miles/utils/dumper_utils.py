@@ -15,6 +15,7 @@ import torch.distributed as dist
 from sglang.srt.debug_utils.dumper import DumperConfig, _get_rank, dumper
 
 from miles.backends.training_utils.parallel import get_parallel_state
+from miles.utils.environ import enable_experimental_ft_trainer
 from miles.utils.process_group_utils import GeneralPGUtil
 from miles.utils.structured_log import log_structured
 
@@ -111,7 +112,8 @@ class DumperMegatronUtil:
         get_grad: Callable[[torch.nn.Parameter], torch.Tensor | None] | None = None
         if self.phase is DumperPhase.FWD_BWD and self.overrides.get("enable_model_grad"):
             _log_model_grad_coverage(extracted_model)
-            get_grad = _build_full_grad_getter(extracted_model)
+            if enable_experimental_ft_trainer():
+                get_grad = _build_full_grad_getter(extracted_model)
 
         # Weights/grads are a once-per-rollout end-state, so pin them to step 0 instead of
         # the running per-microbatch step.
