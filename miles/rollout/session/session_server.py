@@ -13,7 +13,6 @@ import httpx
 import setproctitle
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from miles.rollout.session.sessions import setup_session_routes
@@ -79,21 +78,24 @@ class SessionServer:
         }
 
     def build_proxy_response(self, result: dict) -> Response:
-        content = result["response_body"]
-        status_code = result["status_code"]
+        """Forward the upstream result to the client verbatim.
+
+        This is a proxy: the chat-completion handler already parses and validates
+        the upstream JSON once for TITO token tracking, so re-parsing and
+        re-serializing it through JSONResponse would only double CPU on large
+        (multi-MB all-token routed-experts) responses. We return the original
+        bytes and let Starlette recompute framing from the body — this also makes
+        non-JSON upstream bodies (e.g. error pages) pass through unchanged.
+        """
         # Drop wire-level framing headers from upstream so Starlette rebuilds them
-        # from the body we actually send: transfer-encoding is hop-by-hop
+        # from the body we actually send: transfer-encoding is hop-by-hop, and
+        # httpx already decoded the body so content-encoding/length no longer match.
         headers = {
             k: v
             for k, v in result["headers"].items()
             if k.lower() not in ("content-length", "transfer-encoding", "content-encoding")
         }
-        content_type = headers.get("content-type", "")
-        try:
-            data = json.loads(content)
-            return JSONResponse(content=data, status_code=status_code, headers=headers)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return Response(content=content, status_code=status_code, headers=headers, media_type=content_type)
+        return Response(content=result["response_body"], status_code=result["status_code"], headers=headers)
 
 
 def run_session_server(args, backend_url: str):
