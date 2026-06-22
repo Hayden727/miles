@@ -100,8 +100,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
-        # FSDP trains stock HF modeling: apply HF-version compat patches (s_aux guard, fp8
-        # fail-fast, GatedDeltaNet packing fix, DSA warn).
+        # FSDP trains stock HF modeling: apply HF-version compat patches.
         from .hf_compat_patches import apply_hf_compat_patches
 
         apply_hf_compat_patches(self.hf_config)

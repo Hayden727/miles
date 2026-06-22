@@ -29,11 +29,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# The train->rollout param-name/shape contract is owned by the WeightBridge registry
-# (weight_bridge.py): per-model-type transforms rewrite the streamed (name, tensor) into what
-# the SGLang loader expects. E.g. transformers>=5.6 stores qwen3_moe experts as one batched
-# tensor but SGLang wants per-expert names; qwen3_5_moe consumes the batched layout as-is, so it
-# registers no transform and streams verbatim.
+# Per-model-type train->rollout name/shape transforms (see weight_bridge.py): e.g. split
+# transformers>=5.6 batched qwen3_moe experts into the per-expert names SGLang wants.
 from .weight_bridge import _qwen3_moe_expand, get_param_transform
 
 
@@ -120,8 +117,7 @@ class UpdateWeight(abc.ABC):
                     bucket = []
                     bucket_size = 0
 
-                # Names produced by the WeightBridge expert-split are already cast in _iter_sync_named_params;
-                # only un-transformed (passthrough) names are looked up here (None -> no cast).
+                # passthrough params only; bridge-split experts are pre-cast in _iter_sync_named_params
                 target_dtype = orig_dtypes.get(name) if orig_dtypes is not None else None
                 param = param.cuda()
                 if isinstance(param, DTensor):
@@ -149,9 +145,8 @@ class UpdateWeight(abc.ABC):
         for name, param, target_dtype in bucket:
             if hasattr(param, "wait"):
                 param = param.wait()
-            # Downcast the fp32-master gather back to the param's on-disk dtype (bf16 for weights). The
-            # fp32 value is the exact on-disk value, so this round-to-nearest-even reproduces the disk
-            # bf16 bit-for-bit. None target (already-correct dtype, incl. bridge-split experts) is a no-op.
+            # Downcast the fp32 master to the on-disk dtype; round-to-nearest-even reproduces the
+            # disk bf16 bit-for-bit. None target = no cast.
             if target_dtype is not None and param.dtype != target_dtype:
                 param = param.to(target_dtype)
             resolved.append((name, param))

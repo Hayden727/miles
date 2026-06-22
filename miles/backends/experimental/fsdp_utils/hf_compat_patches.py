@@ -122,11 +122,10 @@ def reload_clobbered_checkpoint_params(model, ckpt_path, hf_config, tol=1e-3) ->
     """Re-assert the checkpoint over params that ``from_pretrained`` silently clobbered post-load.
 
     transformers' NemotronH (Mamba2) ``_init_weights`` runs AFTER weight loading and re-initializes
-    Mamba special-init params — observed: every layer's ``mixer.dt_bias`` (Mamba dt init, off by ~40)
-    AND ``mixer.out_proj.weight`` (residual-rescaled init). The FSDP backend then trains on these wrong
-    values and syncs them to sglang, producing garbage rollouts (logprob_abs_diff ~1.2). The on-disk
-    checkpoint is ground truth (standalone sglang loads it and generates coherently), so reload every
-    param whose materialized value differs from disk by > ``tol``.
+    Mamba special-init params — every layer's ``mixer.dt_bias`` and ``mixer.out_proj.weight``. The
+    FSDP backend then trains on these wrong values and syncs them to sglang, producing garbage
+    rollouts. The on-disk checkpoint is ground truth, so reload every param whose materialized value
+    differs from disk by > ``tol``.
 
     Gated to Mamba/hybrid archs so it never reverts an intended from_pretrained transform elsewhere.
     Runs only where weights are materialized (rank-0 CPU load); meta-device ranks are skipped and get
@@ -211,7 +210,6 @@ def _has_config(hf_config) -> bool:
     return hf_config is not None
 
 
-# Order preserved from the original hardcoded sequence (s_aux guard, fp8 guard, DSA warn, GDN packing).
 register_model_patch(ModelPatchHook("flash_attn_saux_guard", _always, lambda cfg: apply_flash_attn_saux_guard()))
 register_model_patch(ModelPatchHook("fp8_checkpoint_guard", _has_config, check_fp8_checkpoint))
 register_model_patch(ModelPatchHook("dsa_train_infer_warn", _has_config, check_train_infer_consistency))
