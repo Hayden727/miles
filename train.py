@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def train(args):
     configure_logger(args, source=MainProcessIdentity())
+    maybe_start_periodic_pyspy_dump(component="driver")
     # allocate the GPUs
     pgs = create_placement_groups(args)
     init_tracking(args)
@@ -133,7 +134,6 @@ async def train(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    maybe_start_periodic_pyspy_dump(component="driver")
     try:
         asyncio.run(train(args))
     finally:
