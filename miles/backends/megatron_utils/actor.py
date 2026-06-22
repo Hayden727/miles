@@ -36,7 +36,7 @@ from ...utils.tensor_backper import TensorBackuper
 from ..training_utils.data import DataIterator, get_data_iterator, get_rollout_data, sync_actor_critic_data
 from ..training_utils.log_utils import log_cpu_memory, log_perf_data, log_rollout_data
 from ..training_utils.loss import (
-    _log_train_advantage_computation_event,
+    log_train_advantage_computation_event,
     compute_advantages_and_returns,
     get_log_probs_and_entropy,
     get_values,
@@ -79,16 +79,6 @@ class MegatronTrainRayActor(TrainRayActor):
         recv_ckpt_src_rank: int | None = None,
         indep_dp_info: IndepDPInfo,
     ) -> int | None:
-        """Initialize the actor.
-
-        Args:
-            args: Runtime arguments.
-            role: Logical role ("actor" or "critic").
-            with_ref: Whether to load a reference model.
-            recv_ckpt_src_rank: If not None, receive checkpoint from this alive_rank
-                via PGTransport instead of loading from disk.
-            indep_dp_info: Independent DP configuration (cell identity, alive rank/size, quorum ID).
-        """
         monkey_patch_torch_dist()
 
         super().init(args, role, with_ref, with_opd_teacher=with_opd_teacher)
@@ -103,7 +93,7 @@ class MegatronTrainRayActor(TrainRayActor):
             indep_dp_info=indep_dp_info,
         )
 
-        self._ft_actor_executor = FTTestActionActorExecutor.from_args(
+        self._ft_test_action_executor = FTTestActionActorExecutor.from_args(
             args,
             cell_index=indep_dp_info.cell_index,
             num_cells=indep_dp_info.num_cells,
@@ -168,9 +158,6 @@ class MegatronTrainRayActor(TrainRayActor):
         elif args.non_persistent_ckpt_type == "local":
             checkpointing_context = {"local_checkpoint_manager": InMemoryCheckpointManager()}
 
-        # A healing cell must apply the peer's checkpoint in full; cold starts (no
-        # --load) set these flags and would silently drop the transferred optimizer
-        # and RNG state.
         heal_load_overrides: dict[str, object] = (
             dict(no_load_optim=False, no_load_rng=False, finetune=False) if recv_ckpt_src_rank is not None else {}
         )
@@ -473,7 +460,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
                 compute_advantages_and_returns(self.args, rollout_data)
-                _log_train_advantage_computation_event(rollout_data)
+                log_train_advantage_computation_event(rollout_data)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
@@ -492,7 +479,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     num_microbatches,
                     witness_info=witness_info,
                     attempt=attempt,
-                    ft_actor_executor=self._ft_actor_executor,
+                    ft_test_action_executor=self._ft_test_action_executor,
                 )
 
             self.prof.step(rollout_id=rollout_id)

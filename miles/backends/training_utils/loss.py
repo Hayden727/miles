@@ -184,7 +184,7 @@ def loss_function(
     )
 
 
-def _log_train_advantage_computation_event(rollout_data: RolloutBatch) -> None:
+def log_train_advantage_computation_event(rollout_data: RolloutBatch) -> None:
     if not is_event_logger_initialized():
         return
 

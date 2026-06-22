@@ -105,6 +105,5 @@ class RolloutDataInjectionUtil:
 def _load_rollout_data_file(path: Path) -> tuple[list[Sample], dict]:
     payload = torch.load(path, weights_only=False)
     data = [Sample.from_dict(sample) for sample in payload["samples"]]
-    # Files recorded before metadata recording have no "metadata" key.
     metadata = payload.get("metadata") or {}
     return data, metadata

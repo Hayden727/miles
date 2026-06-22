@@ -39,11 +39,6 @@ def gather_log_data(
     parallel_state = get_parallel_state()
 
     pg = parallel_state.effective_dp_cp
-    # effective_dp_cp spans intra-cell DP×CP plus indep_dp peers under FT.
-    # If a peer cell crashed, this Gloo gather will hang and time out (120s),
-    # which would propagate up and mark THIS healthy cell as errored — same
-    # cascade pattern as the rmtree-on-NFS case. Logging is convenience; do
-    # not let a failed gather take down the cell.
     log_structured(logger.info, op="cross_cell", phase="start", kind="log_gather", rank=pg.rank)
     try:
         gathered_log_dict = MultiPGUtil.gather_object(
