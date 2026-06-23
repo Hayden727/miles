@@ -89,7 +89,7 @@ class DeepSeekV4Compressor(nn.Module):
 
         self.ape._keep_fp32 = True
 
-        base = config.dsv4_compress_rope_theta
+        base = config.csa_compress_rotary_base
         assert rope_head_dim == 64
         assert base == 160000
         freqs_cis = wrapped_precompute_freqs_cis(config, rope_head_dim=rope_head_dim, base=base)

@@ -11,9 +11,11 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 if [ ${#COMPRESS_RATIOS[@]} -eq 0 ]; then
   COMPRESS_RATIOS=(0 0 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 128 4 0)
 fi
+# dev's --csa-compress-ratios takes a single Python-list-expression string, e.g. "[0,0,4,128]"
+printf -v COMPRESS_RATIOS_STR "[%s]" "$(IFS=','; echo "${COMPRESS_RATIOS[*]}")"
 ROTARY_SCALING_FACTOR="${ROTARY_SCALING_FACTOR:-16}"
 
-SWIGLU_LIMIT_ARGS=(--activation-func-clamp-value 10 --no-bias-swiglu-fusion --no-activation-func-clamp-shared-expert)
+SWIGLU_LIMIT_ARGS=(--activation-func-clamp-value 10 --no-bias-swiglu-fusion)
 
 # DeepSeek V4 Flash config
 MODEL_ARGS=(
@@ -66,12 +68,12 @@ MODEL_ARGS=(
     --experimental-attention-variant dsv4
     --dsv4-hc-mult 4
     --dsv4-hc-sinkhorn-iters 20
-    --dsv4-compress-ratios "${COMPRESS_RATIOS[@]}"
-    --dsv4-compress-rope-theta 160000
-    --dsv4-o-groups 8
-    --dsv4-o-lora-rank 1024
-    --dsv4-n-hash-layers 3
-    --dsv4-window-size 128
+    --csa-compress-ratios "${COMPRESS_RATIOS_STR}"
+    --csa-compress-rotary-base 160000
+    --o-groups 8
+    --o-lora-rank 1024
+    --moe-n-hash-layers 3
+    --csa-window-size 128
 
     # DSA Indexer
     --dsa-indexer-n-heads 64

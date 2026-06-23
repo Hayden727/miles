@@ -67,7 +67,7 @@ class V4Indexer(MegatronModule):
             cp_group=pg_collection.cp,
         )
 
-        rope_base = config.dsv4_compress_rope_theta if self.compress_ratio else config.rotary_base
+        rope_base = config.csa_compress_rotary_base if self.compress_ratio else config.rotary_base
         freqs_cis = wrapped_precompute_freqs_cis(config, rope_head_dim=self.rope_head_dim, base=rope_base)
         self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 

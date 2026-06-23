@@ -53,6 +53,7 @@ class DeepSeekV4Attention(MegatronModule):
         attention_type: str = None,
         cp_comm_type: str = None,
         pg_collection=None,
+        name: str = None,
     ):
         _enable_deepseek_v4_tf32()
         super().__init__(config=config)
@@ -74,14 +75,14 @@ class DeepSeekV4Attention(MegatronModule):
         self.n_heads = config.num_attention_heads
         self.n_local_heads = self.n_heads // config.tensor_model_parallel_size
         self.q_lora_rank = config.q_lora_rank
-        self.o_lora_rank = config.dsv4_o_lora_rank
+        self.o_lora_rank = config.o_lora_rank
         self.head_dim = config.kv_lora_rank
         self.rope_head_dim = config.qk_pos_emb_head_dim
         self.nope_head_dim = self.head_dim - self.rope_head_dim
-        self.n_groups = config.dsv4_o_groups
+        self.n_groups = config.o_groups
         self.n_local_groups = self.n_groups // config.tensor_model_parallel_size
-        self.window_size = config.dsv4_window_size
-        self.compress_ratio = config.dsv4_compress_ratios[layer_id] if config.dsv4_compress_ratios else 0
+        self.window_size = config.csa_window_size
+        self.compress_ratio = config.csa_compress_ratios[layer_id] if config.csa_compress_ratios else 0
         self.eps = config.layernorm_epsilon
         self.use_fp8_qat = config.fp8 is not None
 
@@ -182,7 +183,7 @@ class DeepSeekV4Attention(MegatronModule):
             else:
                 self.indexer = None
 
-        rope_base = config.dsv4_compress_rope_theta if self.compress_ratio else config.rotary_base
+        rope_base = config.csa_compress_rotary_base if self.compress_ratio else config.rotary_base
         yarn_disabled = not self.compress_ratio
         freqs_cis = wrapped_precompute_freqs_cis(
             config, rope_head_dim=self.rope_head_dim, base=rope_base, yarn_disabled=yarn_disabled
